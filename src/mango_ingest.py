@@ -29,8 +29,12 @@ from irods.session import iRODSSession
 from rich.console import Console
 from rich.markup import escape
 from rich.pretty import Pretty
-from watchdog.events import (EVENT_TYPE_CREATED, FileSystemEvent,
-                             FileSystemEventHandler, RegexMatchingEventHandler)
+from watchdog.events import (
+    EVENT_TYPE_CREATED,
+    FileSystemEvent,
+    FileSystemEventHandler,
+    RegexMatchingEventHandler,
+)
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
@@ -120,6 +124,7 @@ def irods_mkdir_p(irods_session: iRODSSession, collection_path: str):
         print(e)
     return collection_path
 
+
 ## for use in the do_initial_sync function
 def check_filters(
     file_path: pathlib.Path, regexes=None, filter=None, filter_kwargs=None
@@ -197,7 +202,7 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
         self.filter_kwargs = kwargs.pop("filter_kwargs", None)
         self.verify_checksum = kwargs.pop("verify_checksum", False)
         super().__init__(**kwargs)
-    
+
     ## Override dispatch to use re.search instead of re.match
     def dispatch(self, event: FileSystemEvent) -> None:
         """Dispatches events to the appropriate methods.
@@ -221,7 +226,6 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
 
         if any(r.search(p) for r in self.regexes for p in paths):
             super().dispatch(event)
-
 
     # on_closed is called when writing to a file has finished and the handler is closed
     def on_closed(self, event: FileSystemEvent) -> None:
@@ -318,11 +322,11 @@ def compare_checksums(session, file_path, data_object_path):
         obj = session.data_objects.get(data_object_path)
         irods_checksum = obj.chksum()
         irods_checksum_sha256 = irods_to_sha256_checksum(irods_checksum)
-
+        BUFFER = 32 * 1024 * 1024
         # get local checksum
         hash_sha256 = sha256()
         with open(file_path, "rb") as file:
-            for chunk in iter(lambda: file.read(4096), b""):
+            for chunk in iter(lambda: file.read(BUFFER), b""):
                 hash_sha256.update(chunk)
         local_checksum_sha256 = hash_sha256.hexdigest()
 
@@ -375,8 +379,16 @@ def upload_to_irods(
                 # f_dst.flush()
     result_object = irods_session.data_objects.get(dst_path)
 
-    if check_data_object_replica_status(result_object) or (
-        verify_checksum and compare_checksums(irods_session, str(local_path), dst_path)
+    if (
+        check_data_object_replica_status(result_object)
+        and (result_object.size == local_path.stat().st_size)
+        and (
+            not verify_checksum
+            or (
+                verify_checksum
+                and compare_checksums(irods_session, str(local_path), dst_path)
+            )
+        )
     ):
         print(f"Successfully uploaded local {local_path} to irods {dst_path}")
         return result_object
@@ -413,7 +425,9 @@ def do_initial_sync(
         if path_object.is_file() and (full_path := path_object.resolve()):
 
             print(f"sync {full_path}")
-            if ignore and any([re.search(pattern, str(full_path)) for pattern in ignore]):
+            if ignore and any(
+                [re.search(pattern, str(full_path)) for pattern in ignore]
+            ):
                 print(f"ignoring {full_path}")
                 continue
 
@@ -495,7 +509,10 @@ def do_initial_sync(
     "--regex", multiple=True, default=[], help="regular expression to match [multiple]"
 )
 @click.option(
-    "--glob", help="single glob expression to match as a simpler alternative to --regex"
+    "--glob",
+    multiple=True,
+    default=[],
+    help="glob expression to match as a simpler alternative to --regex [multiple]",
 )
 @click.option(
     "--filter",
@@ -569,12 +586,12 @@ def main(
     ENVIRONTMENT VARIABLES
 
     All parameters can also be set via environment variables using their long name, uppercased and prefixed
-    with `MANGO_` . For example 
+    with `MANGO_` . For example
 
         `export MANGO_DESTINATION="/zone/home/project/ingest" `
-    
+
     is the same as specifying the command line option
-    
+
         `mango_ingest --destination="/zone/home/project/ingest" `
 
     CONFIGURATION FILE
@@ -607,11 +624,14 @@ def main(
         # the local directory to watch
         path = pathlib.Path(path).resolve()
 
-        ignore_glob = list(ignore_glob) # its initially an immutable tuple
+        ignore_glob = list(ignore_glob)  # its initially an immutable tuple
         ignore = list(ignore)
+        glob = list(glob)
+        regex = list(regex)
 
         ## setup the reporting thread
         if not do_dry_run:
+
             def smart_save_results():
                 while True:
                     report_file = pathlib.Path(path, result_filename)
@@ -625,16 +645,17 @@ def main(
                         )
                     ):
                         report_file.write_text(json.dumps(result, indent=2))
-                        print(f"Updated report file {report_file}", style="orange1 bold")
+                        print(
+                            f"Updated report file {report_file}", style="orange1 bold"
+                        )
                     print(f"Reporting thread heartbeat", style="orange1 bold")
                     time.sleep(60)
-                
 
             reporting_thread = threading.Thread(target=smart_save_results, daemon=True)
             reporting_thread.start()
             print("Reporting thread started", style="orange1")
             # add the report filename to the ignore list
-            
+
             ignore_glob.append(result_filename_glob)
 
         #### Processing of arguments
@@ -647,6 +668,10 @@ def main(
         global irods_session
         if not (irods_session := get_irods_session()):
             exit("Cannot obtain a valid irods session")
+
+        # compile the glob patterns into regexes
+        if glob:
+            regex = [fnmatch.translate(pattern) for pattern in glob] + regex
 
         # compile the ignore glob patterns to regexes
         if ignore_glob:
@@ -666,7 +691,7 @@ def main(
         # in this case the passed sync_glob needs to be set to None
         sync_glob = None
         if sync:
-            sync_glob = glob if glob else "*"
+            sync_glob = "*"
         if sync or restart:
             print("First doing an initial sync", style="red")
             do_initial_sync(
@@ -743,10 +768,10 @@ def examples(ctx):
     REGULAR EXPRESSIONS DOCUMENTATION
 
     Please consult https://docs.python.org/3/library/re.html to learn more about regular expressions in Python
-    
+
     """
 
-    console.print(ctx.get_help(),soft_wrap=False, markup=True)
+    console.print(ctx.get_help(), soft_wrap=False, markup=True)
 
 
 @main.command()
@@ -786,7 +811,7 @@ def check_regex(regex, filename):
         )
 
 
-if __name__ == "__main__":
+def entry_point():
     default_map = {}  # default values for all command line options of the main command
     if config_file := os.getenv("MANGO_INGEST_CONFIG"):
         try:
@@ -794,3 +819,7 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"Problem loading config file: {e}")
     main(obj={}, auto_envvar_prefix="MANGO", default_map=default_map)
+
+
+if __name__ == "__main__":
+    entry_point()
