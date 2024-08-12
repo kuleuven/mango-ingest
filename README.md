@@ -44,6 +44,7 @@ Usage: mango_ingest.py [OPTIONS] COMMAND [ARGS]...
   specified by the command line option or environment variable takes
   precedence.
 
+```
 Options:
   -v, --verbose                Show runtime messages
   -r, --recursive              Also watch sub directories
@@ -79,3 +80,5 @@ Commands:
   check-regex               Utilty to test a regular expression against a...
   examples                  Examples
   generate-config-template  Generate a YAML config template
+
+```
