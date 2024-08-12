@@ -49,6 +49,7 @@ result = {
     "success": [],
     "failed": [],
     "ignored": [],
+    "locked": [],
 }
 
 # tick tick, first tick is launch time of this script
@@ -320,7 +321,13 @@ def compare_checksums(session, file_path, data_object_path):
         # get checksum from iRODS
         # put first so function fails early if data object does not exist
         obj = session.data_objects.get(data_object_path)
-        irods_checksum = obj.chksum()
+        try:
+            irods_checksum = obj.chksum()
+        except Exception as e:
+            if -1803000 in e.args:
+                print("Object is locked", style = "red bold")
+                result["locked"].append(get_upload_status_record(data_object_path))
+            return False
         irods_checksum_sha256 = irods_to_sha256_checksum(irods_checksum)
         BUFFER = 32 * 1024 * 1024
         # get local checksum
