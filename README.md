@@ -57,8 +57,8 @@ Options:
                                needed for network mounted drives for example
                                [default: native]
   --regex TEXT                 regular expression to match [multiple]
-  --glob TEXT                  single glob expression to match as a simpler
-                               alternative to --regex
+  --glob TEXT                  glob expression to match as a simpler
+                               alternative to --regex [multiple]
   --filter TEXT                use an external filter (along regex/glob
                                patterns), it will be dynamically imported
   --filter-kwargs TEXT         A json string that will be parsed as a dict and
@@ -80,5 +80,4 @@ Commands:
   check-regex               Utilty to test a regular expression against a...
   examples                  Examples
   generate-config-template  Generate a YAML config template
-
 ```

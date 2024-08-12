@@ -1,0 +1,14 @@
+destination: /zone/home/project/ingest
+do_dry_run: false
+filter: null
+filter_kwargs: null
+glob: '*.csv'
+ignore: []
+ignore_glob: []
+observer: native
+path: .
+recursive: false
+regex: []
+sync: false
+verbose: true
+verify_checksum: true
