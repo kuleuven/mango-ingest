@@ -354,38 +354,49 @@ def upload_to_irods(
     local_base_path: pathlib.Path | None = None,
     verify_checksum=False,
 ):
-
+    ## check if the object is in a local sub directory
+    # start assuming it is not..
     rel_local_parent = None  # kinda '.'
+    # did we get a proper monotoring base path?
     if local_base_path:
+        # ok, then chop off the base monitoring path and see waht is left
         rel_local_path = local_path.relative_to(local_base_path)
+        # check if there are parent paths left and isolate the full hierarchy to use in the 
+        # irods counter part later
         if len(rel_local_path.parents) > 1:
             rel_local_parent = rel_local_path.parent
     else:
         rel_local_path = local_path.name
-
+    # if there are local sub directories, ensure these are also available in the irods destination base
+    # by creating them if needed
     if rel_local_parent:
         irods_mkdir_p(
             irods_session,
             str(pathlib.PurePath(irods_collection, str(rel_local_parent))),
         )
-
+    # utility iterator to read the local file in chunks: saves local disk space(!) and feeds a 
+    # progress bar
     def read_in_chuncks(file_handler, chunk_size=1024 * 1024 * 8):
         while True:
             data = file_handler.read(chunk_size)
             if not data:
                 break
             yield data
-
+    # consruct the irods destination full path
     dst_path = str(pathlib.PurePath(irods_collection, str(rel_local_path)))
-    buffering = 1024 * 1024
+    # make the local read buffer 32MB 
+    buffering = 32* 1024 * 1024
+    # open the file with cool 'Rich' progress bar as a console display asset which implictely decorates a regular open()
     with rich.progress.open(local_path, "rb", buffering=buffering) as f:
         with irods_session.data_objects.open(dst_path, "w", auto_close=True) as f_dst:
-            # f_dst.write(f.read(buffering))
             for chunk in read_in_chuncks(f):
                 f_dst.write(chunk)
-                # f_dst.flush()
     result_object = irods_session.data_objects.get(dst_path)
 
+    # the whole aftermath validation chain
+    # with replica status, then size comparison and if requested the (cpu and i/o expensive) checksum validation.
+    # The 'and' operation ensures if the "easier" validation rule fails, the next expensive validation rule is not 
+    # unnecessarily executed
     if (
         check_data_object_replica_status(result_object)
         and (result_object.size == local_path.stat().st_size)
@@ -403,7 +414,8 @@ def upload_to_irods(
         print(f"Failed uploading {local_path} to irods {dst_path}")
         return False
 
-
+### intial sync function, inspired by Jef's sync script but adding + and - filters, including
+### custom filters if requested. Also offers restart of previous failed transfers
 def do_initial_sync(
     irods_session: iRODSSession | None,
     path: pathlib.Path,
@@ -416,7 +428,6 @@ def do_initial_sync(
     restart_paths=[],  # list of path strings
     ignore=None,
     verify_checksum=False,
-    do_not_upload_if_already_exists=True,
 ) -> dict:
 
     path_objects = []
@@ -493,11 +504,14 @@ def do_initial_sync(
                 continue
         else:
             print(f" did not treat local dir {path_object}")
-
+    # not needed, but semantically correct:
     return result
 
-
+### The main command 
+# Declare it as a mother ship command, which can be invoked with or without sub commands
+# sub commands in this context are meant to be auxiliary
 @click.group(context_settings={"show_default": True}, invoke_without_command=True)
+# The many options start just here
 @click.option("-v", "--verbose", is_flag=True, help="Show runtime messages")
 @click.option("-r", "--recursive", is_flag=True, help="Also watch sub directories")
 @click.option("-p", "--path", default=".", help="The (local) path to monitor")
@@ -794,7 +808,7 @@ def generate_config_template(ctx, output):
     yaml_config = yaml.safe_dump(options, default_flow_style=False, indent=2)
     pathlib.Path(output).write_text(yaml_config)
 
-    click.echo(yaml_config)
+    console.print(yaml_config)
 
 
 @main.command()

@@ -1,14 +1,44 @@
-Usage: mango_ingest.py [OPTIONS] COMMAND [ARGS]...
 
-  ManGO ingest is a lightweight tool to monitor a local directory for file
-  changes and ingest (part of) them into iRODS. There is no need for cronjobs
-  as it is based on python watchdog which starts its own threads for continous
-  operations. It has also the benefit of adapting to the local file system on
-  windows, mac or linux.
+## Purpose
 
-  The main purpose it to be an easy entry point for ingestion of files into
-  iRODS, from where possibly a ManGO Flow task will pick up and handle further
-  processing
+ManGO ingest is a lightweight tool to monitor a local directory for file
+changes and copy (part of) them into iRODS. There is no need for 
+cronjobs as as it is based on python watchdog which starts its own threads
+for continous operations. It has also the benefit of adapting to the 
+local file system on windows, mac or linux  to use the native, low overhead listeners for changes.
+
+The main purpose it to be an easy entry point for ingestion of files 
+into iRODS, from where possibly a ManGO Flow task will pick up and 
+handle further processing
+
+
+## Installation
+
+### Recommended
+
+- check out this repository and cd into it
+- run the following commands
+```bash
+$ python -m venv venv
+$ . venv/bin/activate
+$ pip install --editable src
+```
+Afterwards verify the executable `mango_ingest` is available in your PATH
+
+```bash
+$ mango_ingest --help
+```
+
+### Quick checkout
+
+Just checkout the repository and copy the script `mango_ingest.py` around to where you want to execute it
+
+
+## Usage
+
+`mango_ingest [OPTIONS] [COMMAND [OPTIONS] [ARGS]]`
+
+  
 
   If it detects a new file creation, the corresponding file is inspected
   through a white list (glob pattern and/or regular expression list) and if
@@ -17,7 +47,7 @@ Usage: mango_ingest.py [OPTIONS] COMMAND [ARGS]...
   Ignore patterns `--ignore-glob` and regular expressions `--ignore` are
   evaluated before any `--glob` and/or `--regex`
 
-  Custom filters can be specified too with --filter, if they are resolvable
+  Custom filters can be specified too with `--filter`, if they are resolvable
   with a dynamic import. The parameter is a string defining the name of the
   module nf function in the form `<module>.<function>` and that functions
   takes as the first positional parameter the `pathlib.Path` parameter of the
