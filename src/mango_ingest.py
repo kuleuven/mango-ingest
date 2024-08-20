@@ -20,6 +20,7 @@ import cachetools.func
 import click
 import rich
 import rich.panel
+import rich.pretty
 import rich.progress
 import yaml
 from cachetools import TTLCache
@@ -29,12 +30,8 @@ from irods.session import iRODSSession
 from rich.console import Console
 from rich.markup import escape
 from rich.pretty import Pretty
-from watchdog.events import (
-    EVENT_TYPE_CREATED,
-    FileSystemEvent,
-    FileSystemEventHandler,
-    RegexMatchingEventHandler,
-)
+from watchdog.events import (FileSystemEvent, FileSystemEventHandler,
+                             RegexMatchingEventHandler)
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
@@ -68,7 +65,7 @@ result_filename_glob = "mango_ingest_results-*.json"
 def print(*args, **kwargs):
     """Override the Python built in print function with the rich library version and only really print when asked"""
     if print_output:
-        console.print(*args, **kwargs)
+        console.log(*args, **kwargs)
 
 
 ## simple caching and re-use, to expand like mango flow/ mango portal with expiry checks?
@@ -176,7 +173,7 @@ class ManGOIngestWatcher(object):
                     f"ManGO Ingest is now monitoring {os.path.abspath(self.path)}\n"
                     f"Recusrsive: {self.recursive}\n"
                     f"Observer: {type(self.observer)}\n"
-                    f"Handler applied: {pprint.pformat(self.handler, depth=2)}"
+                    f"Handler applied: {rich.pretty.pretty_repr(self.handler)}"
                 ),
                 style="green bold",
                 expand=True,
@@ -190,6 +187,7 @@ class ManGOIngestWatcher(object):
             self.observer.stop()
         # lower the sail, absorb the watcher thread
         self.observer.join()
+        irods_session.cleanup()
         print("\n:waving_hand: Watcher terminated, have a nice day!", style="red bold")
 
 
@@ -626,7 +624,7 @@ def main(
     # save the local parameters (the arguments of main()) in the click context object so other sub commands can read them
     ctx.obj = {**locals()}
 
-    # only execute if there is no sub command invoked
+    # the main processing: only execute if there is no (auxiliary) sub command invoked
     if ctx.invoked_subcommand is None:
         if verbose or do_dry_run:
             global print_output
@@ -645,7 +643,7 @@ def main(
         # the local directory to watch
         path = pathlib.Path(path).resolve()
 
-        ignore_glob = list(ignore_glob)  # its initially an immutable tuple
+        ignore_glob = list(ignore_glob)  # its initially an immutable tuple, make it mutable 
         ignore = list(ignore)
         glob = list(glob)
         regex = list(regex)
@@ -710,9 +708,11 @@ def main(
         # a bit special: sync_glob is only used to do a pre-monitoring sync
         # but the sync may also be called with the restart option only
         # in this case the passed sync_glob needs to be set to None
+        # if sync is called, and there is exactly 1 glob expression, use this
+        # to do the glob scanning
         sync_glob = None
         if sync:
-            sync_glob = "*"
+            sync_glob = glob[0] if (len(glob) ==1 and not regex) else "*"
         if sync or restart:
             print("First doing an initial sync", style="red")
             do_initial_sync(
