@@ -837,22 +837,22 @@ def check_regex(regex, filename):
 
 @main.command(name="clean")
 @click.option(
-    "--mode",
-    help="Clean up older result files",
-    type=click.Choice(["all", "older"]),
-    default="older",
+    "-a",
+    "clean_all",
+    is_flag=True,
+    help="Clean up all result files",
 )
 @click.option("--path", default=".", help="Directory holding the report files")
-def clean_results(mode, path):
+def clean_results(clean_all, path):
     """
-    Clean up older (default) or all result files
+    Clean up older (default) or all (-a) result files
     """
     path = pathlib.Path(path)
     result_files = sorted(
         [p for p in path.glob(result_filename_glob)], key=lambda t: t.stat().st_mtime
     )
     # ), key=lambda t: t.stat().st_mtime)
-    if mode == "older":
+    if not clean_all:
         result_files = result_files[:-1]
 
     for res in result_files:
