@@ -38,7 +38,16 @@ Just checkout the repository and copy the script `mango_ingest.py` around to whe
 
 `mango_ingest [OPTIONS] [COMMAND [OPTIONS] [ARGS]]`
 
-  
+
+  ManGO ingest is a lightweight tool to monitor a local directory for file
+  changes and ingest (part of) them into iRODS. There is no need for cronjobs
+  as it is based on python watchdog which starts its own threads for continous
+  operations. It has also the benefit of adapting to the local file system on
+  windows, mac or linux.
+
+  The main purpose it to be an easy entry point for ingestion of files into
+  iRODS, from where possibly a ManGO Flow task will pick up and handle further
+  processing
 
   If it detects a new file creation, the corresponding file is inspected
   through a white list (glob pattern and/or regular expression list) and if
@@ -47,9 +56,9 @@ Just checkout the repository and copy the script `mango_ingest.py` around to whe
   Ignore patterns `--ignore-glob` and regular expressions `--ignore` are
   evaluated before any `--glob` and/or `--regex`
 
-  Custom filters can be specified too with `--filter`, if they are resolvable
+  Custom filters can be specified too with --filter, if they are resolvable
   with a dynamic import. The parameter is a string defining the name of the
-  module nf function in the form `<module>.<function>` and that functions
+  module and function in the form `<module>.<function>` and that function
   takes as the first positional parameter the `pathlib.Path` parameter of the
   file to validate, followed by an optional set of kwargs parameters. See also
   the option `--filter-kwargs` which accepts a dict/json string.
@@ -108,6 +117,8 @@ Options:
 
 Commands:
   check-regex               Utilty to test a regular expression against a...
+  clean                     Clean up older (default) or all result files
   examples                  Examples
   generate-config-template  Generate a YAML config template
+
 ```
