@@ -30,8 +30,11 @@ from irods.session import iRODSSession
 from rich.console import Console
 from rich.markup import escape
 from rich.pretty import Pretty
-from watchdog.events import (FileSystemEvent, FileSystemEventHandler,
-                             RegexMatchingEventHandler)
+from watchdog.events import (
+    FileSystemEvent,
+    FileSystemEventHandler,
+    RegexMatchingEventHandler,
+)
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
 
@@ -128,7 +131,7 @@ def check_filters(
     file_path: pathlib.Path, regexes=None, filter=None, filter_kwargs=None
 ) -> bool:
 
-    if regexes and any([re.search(pattern, file_path) for pattern in regexes]):
+    if regexes and any(re.search(pattern, str(file_path)) for pattern in regexes):
         return True
 
     if filter:
@@ -171,7 +174,7 @@ class ManGOIngestWatcher(object):
             rich.panel.Panel(
                 escape(
                     f"ManGO Ingest is now monitoring {os.path.abspath(self.path)}\n"
-                    f"Recusrsive: {self.recursive}\n"
+                    f"Recursive: {self.recursive}\n"
                     f"Observer: {type(self.observer)}\n"
                     f"Handler applied: {rich.pretty.pretty_repr(self.handler)}"
                 ),
@@ -323,7 +326,7 @@ def compare_checksums(session, file_path, data_object_path):
             irods_checksum = obj.chksum()
         except Exception as e:
             if -1803000 in e.args:
-                print("Object is locked", style = "red bold")
+                print("Object is locked", style="red bold")
                 result["locked"].append(get_upload_status_record(data_object_path))
             return False
         irods_checksum_sha256 = irods_to_sha256_checksum(irods_checksum)
@@ -359,7 +362,7 @@ def upload_to_irods(
     if local_base_path:
         # ok, then chop off the base monitoring path and see waht is left
         rel_local_path = local_path.relative_to(local_base_path)
-        # check if there are parent paths left and isolate the full hierarchy to use in the 
+        # check if there are parent paths left and isolate the full hierarchy to use in the
         # irods counter part later
         if len(rel_local_path.parents) > 1:
             rel_local_parent = rel_local_path.parent
@@ -372,7 +375,8 @@ def upload_to_irods(
             irods_session,
             str(pathlib.PurePath(irods_collection, str(rel_local_parent))),
         )
-    # utility iterator to read the local file in chunks: saves local disk space(!) and feeds a 
+
+    # utility iterator to read the local file in chunks: saves local disk space(!) and feeds a
     # progress bar
     def read_in_chuncks(file_handler, chunk_size=1024 * 1024 * 8):
         while True:
@@ -380,10 +384,11 @@ def upload_to_irods(
             if not data:
                 break
             yield data
+
     # consruct the irods destination full path
     dst_path = str(pathlib.PurePath(irods_collection, str(rel_local_path)))
-    # make the local read buffer 32MB 
-    buffering = 32* 1024 * 1024
+    # make the local read buffer 32MB
+    buffering = 32 * 1024 * 1024
     # open the file with cool 'Rich' progress bar as a console display asset which implictely decorates a regular open()
     with rich.progress.open(local_path, "rb", buffering=buffering) as f:
         with irods_session.data_objects.open(dst_path, "w", auto_close=True) as f_dst:
@@ -393,7 +398,7 @@ def upload_to_irods(
 
     # the whole aftermath validation chain
     # with replica status, then size comparison and if requested the (cpu and i/o expensive) checksum validation.
-    # The 'and' operation ensures if the "easier" validation rule fails, the next expensive validation rule is not 
+    # The 'and' operation ensures if the "easier" validation rule fails, the next expensive validation rule is not
     # unnecessarily executed
     if (
         check_data_object_replica_status(result_object)
@@ -411,6 +416,7 @@ def upload_to_irods(
     else:
         print(f"Failed uploading {local_path} to irods {dst_path}")
         return False
+
 
 ### intial sync function, inspired by Jef's sync script but adding + and - filters, including
 ### custom filters if requested. Also offers restart of previous failed transfers
@@ -505,7 +511,8 @@ def do_initial_sync(
     # not needed, but semantically correct:
     return result
 
-### The main command 
+
+### The main command
 # Declare it as a mother ship command, which can be invoked with or without sub commands
 # sub commands in this context are meant to be auxiliary
 @click.group(context_settings={"show_default": True}, invoke_without_command=True)
@@ -643,7 +650,8 @@ def main(
         # the local directory to watch
         path = pathlib.Path(path).resolve()
 
-        ignore_glob = list(ignore_glob)  # its initially an immutable tuple, make it mutable 
+        # the parameters below are initially immutable tuples, make them mutable
+        ignore_glob = list(ignore_glob)
         ignore = list(ignore)
         glob = list(glob)
         regex = list(regex)
@@ -688,6 +696,10 @@ def main(
         if not (irods_session := get_irods_session()):
             exit("Cannot obtain a valid irods session")
 
+        sync_glob = None
+        if sync:
+            sync_glob = glob[0] if (len(glob) == 1 and not regex) else "*"
+
         # compile the glob patterns into regexes
         if glob:
             regex = [fnmatch.translate(pattern) for pattern in glob] + regex
@@ -696,6 +708,7 @@ def main(
         if ignore_glob:
             ignore = [fnmatch.translate(pattern) for pattern in ignore_glob] + ignore
         # set regexes explicitely to None if empty to trigger the default behavior
+        # in the regex handler, it does not cope with empty lists
         regex = list(regex) if regex else None
         ignore = list(ignore) if ignore else None
         ignore_glob = ignore_glob if ignore_glob else None
@@ -710,9 +723,7 @@ def main(
         # in this case the passed sync_glob needs to be set to None
         # if sync is called, and there is exactly 1 glob expression, use this
         # to do the glob scanning
-        sync_glob = None
-        if sync:
-            sync_glob = glob[0] if (len(glob) ==1 and not regex) else "*"
+
         if sync or restart:
             print("First doing an initial sync", style="red")
             do_initial_sync(
@@ -726,14 +737,6 @@ def main(
                 restart_paths=restart_paths,
                 verify_checksum=verify_checksum,
             )
-
-        # for the watcher, add the glob pattern to the regex list
-        # @TODO maybe the glob pattern should not be added if there are regexes defined
-        # and in that case only be used to do an initial sync (which defaults to *),
-        # yet still considers regexes if there are any
-        if glob:
-            print(f"glob: {glob}")
-            regex = [fnmatch.translate(glob)] + (regex or [])
 
         # check for custom filters
         if filter and "." in filter:
@@ -830,6 +833,31 @@ def check_regex(regex, filename):
         console.print(
             f"Applying re.search({regex},{filename}): :poop: no match", style="red bold"
         )
+
+
+@main.command(name="clean")
+@click.option(
+    "--mode",
+    help="Clean up older result files",
+    type=click.Choice(["all", "older"]),
+    default="older",
+)
+@click.option("--path", default=".", help="Directory holding the report files")
+def clean_results(mode, path):
+    """
+    Clean up older (default) or all result files
+    """
+    path = pathlib.Path(path)
+    result_files = sorted(
+        [p for p in path.glob(result_filename_glob)], key=lambda t: t.stat().st_mtime
+    )
+    # ), key=lambda t: t.stat().st_mtime)
+    if mode == "older":
+        result_files = result_files[:-1]
+
+    for res in result_files:
+        console.print(f"Cleaning {res}")
+        res.unlink()
 
 
 def entry_point():

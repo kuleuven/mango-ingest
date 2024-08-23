@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(
-    name='irods_ingest',
+    name='mango_ingest',
     version='1.0.0',
     py_modules=['mango_ingest'],
     install_requires=[
