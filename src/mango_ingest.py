@@ -25,7 +25,9 @@ import rich.progress
 import yaml
 from cachetools import TTLCache
 from cachetools.keys import hashkey
+from irods.collection import iRODSCollection
 from irods.data_object import iRODSDataObject
+from irods.meta import AVUOperation, iRODSMeta
 from irods.session import iRODSSession
 from rich.console import Console
 from rich.markup import escape
@@ -37,6 +39,12 @@ from watchdog.events import (
 )
 from watchdog.observers import Observer
 from watchdog.observers.polling import PollingObserver
+
+
+class MangoIngestException(Exception):
+    def __init__(self, message="Mango Flow Metadata Extraction Error", **params):
+        super().__init__(f"{message} : {params}")
+
 
 ##### global variables / objects
 print_output = False
@@ -126,6 +134,52 @@ def irods_mkdir_p(irods_session: iRODSSession, collection_path: str):
     return collection_path
 
 
+# This function is copied from ManGO Flow: safely add or replace AVU triplets
+# based on a dict {'name': 'value', ...} value can be lists
+def bulk_add_metadata(
+    item: iRODSDataObject | iRODSCollection,
+    metadata_items: dict,
+    unit_text: str = "analysis/other",
+    as_admin=False,
+):
+    if metadata_items:
+        metadata_names = metadata_items.keys()
+        avu_operations = [
+            AVUOperation(operation="remove", avu=avu)
+            for avu in item.metadata.items()
+            if avu.name in metadata_names
+        ]
+        for m_name, m_value in metadata_items.items():
+            if type(m_value) == list:
+                avu_operations.extend(
+                    [
+                        AVUOperation(
+                            "add",
+                            iRODSMeta(name=m_name, value=sub_value, units=unit_text),
+                        )
+                        for sub_value in m_value
+                    ]
+                )
+
+            elif type(m_value) == str:
+                avu_operations.append(
+                    AVUOperation(
+                        operation="add",
+                        avu=iRODSMeta(name=m_name, value=m_value, units=unit_text),
+                    )
+                )
+            else:
+                raise (
+                    MangoIngestException(
+                        {"unknown_field_type for AVU operation": type(m_value)}
+                    )
+                )
+        if len(avu_operations):
+            print(f"Adding metadata to {item.name}: {metadata_items}")
+            item.metadata(admin=as_admin).apply_atomic_operations(*avu_operations)
+
+
+
 ## for use in the do_initial_sync function
 def check_filters(
     file_path: pathlib.Path, regexes=None, filter=None, filter_kwargs=None
@@ -141,7 +195,9 @@ def check_filters(
                 print("external rule returned False", style="red bold")
                 return False
         except Exception as e:
-            print(f"An error occurred with external validation: {e}")
+            print(
+                f"An error occurred with external validation: {e} .. Continuing though"
+            )
             return False
 
     return True
@@ -346,7 +402,6 @@ def compare_checksums(session, file_path, data_object_path):
             style="red bold",
         )
         return False
-
 
 def upload_to_irods(
     irods_session: iRODSSession,
@@ -572,7 +627,8 @@ def do_initial_sync(
     help="Dry run: do not upload anything, implies --verbose",
 )
 @click.option(
-    "-nw","--no-watch",
+    "-nw",
+    "--no-watch",
     is_flag=True,
     help="Do not start monitoring for future changes, implies --sync",
 )
@@ -776,7 +832,6 @@ def mango_ingest(
             options = ctx.obj
             del options["ctx"]
             print(json.dumps(options, indent=2))
-            
 
 
 @mango_ingest.command()
@@ -867,7 +922,7 @@ def clean_results(clean_all, path):
     result_files = sorted(
         [p for p in path.glob(result_filename_glob)], key=lambda t: t.stat().st_mtime
     )
-    
+
     if not clean_all:
         # keep the most recent one
         result_files = result_files[:-1]
@@ -883,7 +938,9 @@ def entry_point():
         try:
             default_map = yaml.safe_load(pathlib.Path(config_file).read_text())
         except Exception as e:
-            console.print(f"Problem loading config file {config_file}: {e}", style="red bold")
+            console.print(
+                f"Problem loading config file {config_file}: {e}", style="red bold"
+            )
     mango_ingest(obj={}, auto_envvar_prefix="MANGO", default_map=default_map)
 
 
