@@ -512,7 +512,7 @@ def do_initial_sync(
     return result
 
 
-### The main command
+### The main mango_ingest command
 # Declare it as a mother ship command, which can be invoked with or without sub commands
 # sub commands in this context are meant to be auxiliary
 @click.group(context_settings={"show_default": True}, invoke_without_command=True)
@@ -571,8 +571,13 @@ def do_initial_sync(
     is_flag=True,
     help="Dry run: do not upload anything, implies --verbose",
 )
+@click.option(
+    "-nw","--no-watch",
+    is_flag=True,
+    help="Do not start monitoring for future changes, implies --sync",
+)
 @click.pass_context
-def main(
+def mango_ingest(
     ctx,
     verbose,
     recursive,
@@ -589,6 +594,7 @@ def main(
     verify_checksum,
     restart,
     do_dry_run,
+    no_watch,
 ):
     """
     ManGO ingest is a lightweight tool to monitor a local directory for file changes and ingest (part of) them into iRODS.
@@ -657,7 +663,7 @@ def main(
         regex = list(regex)
 
         ## setup the reporting thread
-        if not do_dry_run:
+        if not (do_dry_run or no_watch):
 
             def smart_save_results():
                 while True:
@@ -697,7 +703,7 @@ def main(
             exit("Cannot obtain a valid irods session")
 
         sync_glob = None
-        if sync:
+        if sync or no_watch:
             sync_glob = glob[0] if (len(glob) == 1 and not regex) else "*"
 
         # compile the glob patterns into regexes
@@ -724,7 +730,7 @@ def main(
         # if sync is called, and there is exactly 1 glob expression, use this
         # to do the glob scanning
 
-        if sync or restart:
+        if sync or restart or no_watch:
             print("First doing an initial sync", style="red")
             do_initial_sync(
                 irods_session,
@@ -746,24 +752,34 @@ def main(
         filter = getattr(filter_module, filter_function) if filter_module else None
         filter_kwargs = json.loads(filter_kwargs) if filter_kwargs else {}
 
-        watcher = ManGOIngestWatcher(
-            path=path,
-            handler=ManGOIngestHandler(
-                path,
-                irods_destination=destination,
-                filter=filter,
-                filter_kwargs=filter_kwargs,
-                verify_checksum=verify_checksum,
-                regexes=regex,  # class RegexMatchingEventHandler
-                ignore_regexes=ignore,  # class RegexMatchingEventHandler
-            ),
-            recursive=recursive,
-            observer=observer,
-        )
-        watcher.run()
+        if not no_watch:
+            watcher = ManGOIngestWatcher(
+                path=path,
+                handler=ManGOIngestHandler(
+                    path,
+                    irods_destination=destination,
+                    filter=filter,
+                    filter_kwargs=filter_kwargs,
+                    verify_checksum=verify_checksum,
+                    regexes=regex,  # class RegexMatchingEventHandler
+                    ignore_regexes=ignore,  # class RegexMatchingEventHandler
+                ),
+                recursive=recursive,
+                observer=observer,
+            )
+            watcher.run()
+        else:
+            # still write the report file
+            report_file = pathlib.Path(path, result_filename)
+            report_file.write_text(json.dumps(result, indent=2))
+            # if verbose output
+            options = ctx.obj
+            del options["ctx"]
+            print(json.dumps(options, indent=2))
+            
 
 
-@main.command()
+@mango_ingest.command()
 @click.pass_context
 def examples(ctx):
     """
@@ -798,7 +814,7 @@ def examples(ctx):
     console.print(ctx.get_help(), soft_wrap=False, markup=True)
 
 
-@main.command()
+@mango_ingest.command()
 @click.option("-o", "--output", default="mango_ingest_config.yaml")
 @click.pass_context
 def generate_config_template(ctx, output):
@@ -814,7 +830,7 @@ def generate_config_template(ctx, output):
     console.print(yaml_config)
 
 
-@main.command()
+@mango_ingest.command()
 @click.option("--regex", help="regular expression (Python syntax) to test")
 @click.argument("filename")
 def check_regex(regex, filename):
@@ -835,7 +851,7 @@ def check_regex(regex, filename):
         )
 
 
-@main.command(name="clean")
+@mango_ingest.command(name="clean")
 @click.option(
     "-a",
     "clean_all",
@@ -851,8 +867,9 @@ def clean_results(clean_all, path):
     result_files = sorted(
         [p for p in path.glob(result_filename_glob)], key=lambda t: t.stat().st_mtime
     )
-    # ), key=lambda t: t.stat().st_mtime)
+    
     if not clean_all:
+        # keep the most recent one
         result_files = result_files[:-1]
 
     for res in result_files:
@@ -864,10 +881,10 @@ def entry_point():
     default_map = {}  # default values for all command line options of the main command
     if config_file := os.getenv("MANGO_INGEST_CONFIG"):
         try:
-            default_map = yaml.safe_load(pathlib.Path(config_file).read_text)
+            default_map = yaml.safe_load(pathlib.Path(config_file).read_text())
         except Exception as e:
-            print(f"Problem loading config file: {e}")
-    main(obj={}, auto_envvar_prefix="MANGO", default_map=default_map)
+            console.print(f"Problem loading config file {config_file}: {e}", style="red bold")
+    mango_ingest(obj={}, auto_envvar_prefix="MANGO", default_map=default_map)
 
 
 if __name__ == "__main__":
