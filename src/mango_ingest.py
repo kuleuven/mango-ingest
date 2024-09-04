@@ -209,6 +209,44 @@ def extract_metadata_from_path(
     return extracted_metadata
 
 
+def create_modify_time_avu(path):
+    """
+    Reads the modify time of a file and returns ingredients for an AVU
+      the attribute, value and unit for a metadata AVU
+
+    When the last modified time cannot be calculated for some reason,
+    it is returned as 'unknown'.
+
+    Arguments
+    ---------
+    path: str
+        path to a local file
+
+    Returns
+    -------
+    avu: dict
+        dictionary containing a default attribute name ('original_modify_time'),
+        the modify time as value, and an empty unit
+    """
+
+    try:
+        mtime = os.path.getmtime(path)
+        # The timestamp is converted from a string to a datetime object,
+        # so the timezone can be made explicit (offset to UTC),
+        # formatted following the ISO 8601 format,
+        # and has the granularity of seconds
+        # (since many Linux systems don't store more granularity)
+        mtime_converted = (
+            datetime.datetime.fromtimestamp(mtime)
+            .astimezone(datetime.timezone.utc)
+            .isoformat(timespec="seconds")
+        )
+    except:
+        mtime_converted = "unknown"
+    avu = {"original_modify_time": mtime_converted}
+    return avu
+
+
 ## for use in the do_initial_sync function
 def check_filters(
     file_path: pathlib.Path, regexes=None, filter=None, filter_kwargs=None
@@ -685,6 +723,11 @@ def do_initial_sync(
     default=[],
     help="regular expression to extract metadata from the path [multiple]",
 )
+@click.option(
+    "--add-modify-time-as-md",
+    is_flag=True,
+    help="Add the original modify date as metadata",
+)
 @click.pass_context
 def mango_ingest(
     ctx,
@@ -705,6 +748,7 @@ def mango_ingest(
     do_dry_run,
     no_watch,
     path_extract,
+    add_modify_time_as_md,
 ):
     """
     ManGO ingest is a lightweight tool to monitor a local directory for file changes and ingest (part of) them into iRODS.
@@ -848,6 +892,9 @@ def mango_ingest(
                 metadata_handlers.append(
                     (extract_metadata_from_path, {"path_regex": path_e})
                 )
+
+        if add_modify_time_as_md:
+            metadata_handlers.append((create_modify_time_avu, {}))
 
         if sync or restart or no_watch:
             print("First doing an initial sync", style="red")
