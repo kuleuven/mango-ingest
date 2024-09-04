@@ -14,6 +14,7 @@ import ssl
 import threading
 import time
 from hashlib import sha256
+from typing import Callable
 
 import cachetools
 import cachetools.func
@@ -139,8 +140,9 @@ def irods_mkdir_p(irods_session: iRODSSession, collection_path: str):
 def bulk_add_metadata(
     item: iRODSDataObject | iRODSCollection,
     metadata_items: dict,
-    unit_text: str = "analysis/other",
+    unit_text: str = "analysis/mango_ingest",
     as_admin=False,
+    prefix="",
 ):
     if metadata_items:
         metadata_names = metadata_items.keys()
@@ -150,6 +152,7 @@ def bulk_add_metadata(
             if avu.name in metadata_names
         ]
         for m_name, m_value in metadata_items.items():
+            m_name = prefix + m_name
             if type(m_value) == list:
                 avu_operations.extend(
                     [
@@ -178,6 +181,32 @@ def bulk_add_metadata(
             print(f"Adding metadata to {item.name}: {metadata_items}")
             item.metadata(admin=as_admin).apply_atomic_operations(*avu_operations)
 
+
+# Copied from ManGO Flow: path based metadata extraction
+# For now disregard mapper and splitter though
+def extract_metadata_from_path(
+    path: str, path_regex: str, mapper: dict = {}, split_metadata: dict = {}
+) -> dict:
+    """
+    both path and path_regex path may be a partial path expression, meaning from the end of a string
+    mapper converts the restricted metadata names into a more general form (irods accepts almost anything)
+    split_metadata is used to further split a value into a list of values
+    and contains the metadata name (before mapping) and the regex to split on
+    """
+    matches = re.search(path_regex, path)
+
+    extracted_metadata = {}
+    if matches:
+        extracted_metadata_raw = matches.groupdict()
+
+        for key, value in extracted_metadata_raw.items():
+            extracted_metadata[mapper.get(key, key)] = (
+                value
+                if not split_metadata.get(key, False)
+                else re.split(split_metadata[key], value)
+            )
+
+    return extracted_metadata
 
 
 ## for use in the do_initial_sync function
@@ -259,6 +288,7 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
         self.filter = kwargs.pop("filter", None)
         self.filter_kwargs = kwargs.pop("filter_kwargs", None)
         self.verify_checksum = kwargs.pop("verify_checksum", False)
+        self.metadata_handlers = kwargs.pop("metadata_handlers", [])
         super().__init__(**kwargs)
 
     ## Override dispatch to use re.search instead of re.match
@@ -318,6 +348,7 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
                 irods_collection=self.irods_destination,
                 local_base_path=self.path,
                 verify_checksum=self.verify_checksum,
+                metadata_handlers=self.metadata_handlers,
             )
             if upload_result:
                 result["success"].append(get_upload_status_record(file_path))
@@ -403,12 +434,14 @@ def compare_checksums(session, file_path, data_object_path):
         )
         return False
 
+
 def upload_to_irods(
     irods_session: iRODSSession,
     local_path: pathlib.Path,
     irods_collection: str,
     local_base_path: pathlib.Path | None = None,
     verify_checksum=False,
+    metadata_handlers: list[(Callable, dict)] = [],
 ):
     ## check if the object is in a local sub directory
     # start assuming it is not..
@@ -467,6 +500,18 @@ def upload_to_irods(
         )
     ):
         print(f"Successfully uploaded local {local_path} to irods {dst_path}")
+        if metadata_handlers:
+            metadata_dict = {}
+            for metadata_handler, kwargs in metadata_handlers:
+                metadata_dict |= metadata_handler(str(local_path), **kwargs)
+            if metadata_dict:
+                bulk_add_metadata(
+                    item=result_object, metadata_items=metadata_dict, prefix="mg."
+                )
+                print(
+                    f"Added {len(metadata_dict)} metadata items to {result_object.name}"
+                )
+
         return result_object
     else:
         print(f"Failed uploading {local_path} to irods {dst_path}")
@@ -487,6 +532,7 @@ def do_initial_sync(
     restart_paths=[],  # list of path strings
     ignore=None,
     verify_checksum=False,
+    metadata_handlers: list[(Callable, dict)] = [],
 ) -> dict:
 
     path_objects = []
@@ -553,6 +599,7 @@ def do_initial_sync(
                     irods_collection=destination,
                     local_base_path=path,
                     verify_checksum=verify_checksum,
+                    metadata_handlers=metadata_handlers,
                 )
                 if upload_result:
                     result["success"].append(get_upload_status_record(full_path))
@@ -632,6 +679,12 @@ def do_initial_sync(
     is_flag=True,
     help="Do not start monitoring for future changes, implies --sync",
 )
+@click.option(
+    "--path-extract",
+    multiple=True,
+    default=[],
+    help="regular expression to extract metadata from the path [multiple]",
+)
 @click.pass_context
 def mango_ingest(
     ctx,
@@ -651,6 +704,7 @@ def mango_ingest(
     restart,
     do_dry_run,
     no_watch,
+    path_extract,
 ):
     """
     ManGO ingest is a lightweight tool to monitor a local directory for file changes and ingest (part of) them into iRODS.
@@ -786,6 +840,15 @@ def mango_ingest(
         # if sync is called, and there is exactly 1 glob expression, use this
         # to do the glob scanning
 
+        # like mango flow: partials, but simpler :-)
+        metadata_handlers = []
+
+        if path_extract:
+            for path_e in list(path_extract):
+                metadata_handlers.append(
+                    (extract_metadata_from_path, {"path_regex": path_e})
+                )
+
         if sync or restart or no_watch:
             print("First doing an initial sync", style="red")
             do_initial_sync(
@@ -798,6 +861,7 @@ def mango_ingest(
                 ignore=ignore,
                 restart_paths=restart_paths,
                 verify_checksum=verify_checksum,
+                metadata_handlers=metadata_handlers,
             )
 
         # check for custom filters
@@ -817,6 +881,7 @@ def mango_ingest(
                     filter=filter,
                     filter_kwargs=filter_kwargs,
                     verify_checksum=verify_checksum,
+                    metadata_handlers=metadata_handlers,
                     regexes=regex,  # class RegexMatchingEventHandler
                     ignore_regexes=ignore,  # class RegexMatchingEventHandler
                 ),
