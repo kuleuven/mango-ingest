@@ -209,42 +209,63 @@ def extract_metadata_from_path(
     return extracted_metadata
 
 
-def create_modify_time_avu(path):
+def iso8601_format_timestamp(timestamp: float) -> str:
     """
-    Reads the modify time of a file and returns ingredients for an AVU
-      the attribute, value and unit for a metadata AVU
+    Turns an float into an ISO 8601-compliant datetime object
 
-    When the last modified time cannot be calculated for some reason,
-    it is returned as 'unknown'.
+    Arguments:
+        timestamp: float
 
-    Arguments
-    ---------
-    path: str
-        path to a local file
-
-    Returns
-    -------
-    avu: dict
-        dictionary containing a default attribute name ('original_modify_time'),
-        the modify time as value, and an empty unit
+    Returns:
+        formatted_timestamp: str
+        A imestamp compliant with the ISO 8601 standard
     """
 
-    try:
-        mtime = os.path.getmtime(path)
-        # The timestamp is converted from a string to a datetime object,
-        # so the timezone can be made explicit (offset to UTC),
-        # formatted following the ISO 8601 format,
-        # and has the granularity of seconds
-        # (since many Linux systems don't store more granularity)
-        mtime_converted = (
-            datetime.datetime.fromtimestamp(mtime)
-            .astimezone(datetime.timezone.utc)
-            .isoformat(timespec="seconds")
-        )
-    except:
-        mtime_converted = "unknown"
-    avu = {"original_modify_time": mtime_converted}
-    return avu
+    # The timestamp is converted from a string to a datetime object,
+    # so the timezone can be made explicit (offset to UTC),
+    # formatted following the ISO 8601 format,
+    # and has the granularity of seconds
+    # (since many Linux systems don't store more granularity)
+    formatted_timestamp = (
+        datetime.datetime.fromtimestamp(timestamp)
+        .astimezone(datetime.timezone.utc)
+        .isoformat(timespec="seconds")
+    )
+    print(type(formatted_timestamp))
+    return formatted_timestamp
+
+
+def extract_system_metadata_from_file(path: str, attributes=[]) -> dict:
+    """
+    Extracts system metadata from a file
+
+    Arguments:
+        path : str
+            The local path to a file
+
+    Keyword Arguments:
+        attributes: list
+            A list of attributes from system metadata
+            which the user wants to extract
+
+    Returns:
+        metadata_dict:
+            A dictionary of attribute-value pairs
+    """
+
+    metadata_dict = {}
+    mapping = {"original_modify_time": "st_mtime"}
+    stats = os.stat(path)
+    for attribute in attributes:
+        try:
+            value = getattr(stats, mapping[attribute])
+            if attribute.endswith("time"):
+                # let's assume it is a datetime we want to get
+                value = iso8601_format_timestamp(value)
+        except:
+            value = "unknown"
+        metadata_dict[attribute] = value
+    return metadata_dict
 
 
 ## for use in the do_initial_sync function
@@ -724,9 +745,9 @@ def do_initial_sync(
     help="regular expression to extract metadata from the path [multiple]",
 )
 @click.option(
-    "--add-modify-time-as-md",
+    "--add-modify-time-as-metadata",
     is_flag=True,
-    help="Add the original modify date as metadata",
+    help="Add the original modify time as metadata",
 )
 @click.pass_context
 def mango_ingest(
@@ -748,7 +769,7 @@ def mango_ingest(
     do_dry_run,
     no_watch,
     path_extract,
-    add_modify_time_as_md,
+    add_modify_time_as_metadata,
 ):
     """
     ManGO ingest is a lightweight tool to monitor a local directory for file changes and ingest (part of) them into iRODS.
@@ -893,8 +914,13 @@ def mango_ingest(
                     (extract_metadata_from_path, {"path_regex": path_e})
                 )
 
-        if add_modify_time_as_md:
-            metadata_handlers.append((create_modify_time_avu, {}))
+        if add_modify_time_as_metadata:
+            metadata_handlers.append(
+                (
+                    extract_system_metadata_from_file,
+                    {"attributes": ["original_modify_time"]},
+                )
+            )
 
         if sync or restart or no_watch:
             print("First doing an initial sync", style="red")
