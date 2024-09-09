@@ -631,8 +631,7 @@ def do_initial_sync_and_or_restart(
     "-d",
     "--destination",
     default=None,
-    help="iRODS destination collection path",
-    prompt="iRODs destination collection",
+    help="iRODS destination collection path"
 )
 @click.option(
     "--observer",
@@ -758,6 +757,10 @@ def mango_ingest(
 
     # the main processing: only execute if there is no (auxiliary) sub command invoked
     if ctx.invoked_subcommand is None:
+        # since the option is not marked as required in order to have the option fall back
+        # through environment variables and/or config file, we need to check and get it here
+        if not destination:
+            destination = click.prompt("Please enter an iRODS destination path")
         if verbose or do_dry_run:
             global print_output
             print_output = True
@@ -811,11 +814,6 @@ def mango_ingest(
             ignore_glob.append(result_filename_glob)
 
         #### Processing of arguments
-
-        # since the option is not marked as required in order to have the option fall back
-        # through environment variables and/or config file, we need to check it here
-        if not destination:
-            exit("No destination found")
 
         global irods_session
         if not (irods_session := get_irods_session()):
