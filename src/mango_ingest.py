@@ -275,6 +275,11 @@ class ManGOIngestWatcher(object):
             self.observer.stop()
         # lower the sail, absorb the watcher thread
         self.observer.join()
+        # write out the report file before exiting
+        report_file = pathlib.Path(self.path, result_filename)
+        report_file.write_text(json.dumps(result, indent=2))
+        print(f"Updated report file {report_file}", style="orange1 bold")
+
         irods_session.cleanup()
         print("\n:waving_hand: Watcher terminated, have a nice day!", style="red bold")
 
@@ -520,7 +525,7 @@ def upload_to_irods(
 
 ### intial sync function, inspired by Jef's sync script but adding + and - filters, including
 ### custom filters if requested. Also offers restart of previous failed transfers
-def do_initial_sync(
+def do_initial_sync_and_or_restart(
     irods_session: iRODSSession | None,
     path: pathlib.Path,
     destination: str,
@@ -623,7 +628,11 @@ def do_initial_sync(
 @click.option("-r", "--recursive", is_flag=True, help="Also watch sub directories")
 @click.option("-p", "--path", default=".", help="The (local) path to monitor")
 @click.option(
-    "-d", "--destination", default=None, help="iRODS destination collection path"
+    "-d",
+    "--destination",
+    default=None,
+    help="iRODS destination collection path",
+    prompt="iRODs destination collection",
 )
 @click.option(
     "--observer",
@@ -643,11 +652,11 @@ def do_initial_sync(
     help="glob expression to match as a simpler alternative to --regex [multiple]",
 )
 @click.option(
-    "--filter",
+    "--filter-func",
     help="use an external filter (along regex/glob patterns), it will be dynamically imported",
 )
 @click.option(
-    "--filter-kwargs",
+    "--filter-func-kwargs",
     help="A json string that will be parsed as a dict and injected as kwargs into the filter after the path",
 )
 @click.option(
@@ -695,8 +704,8 @@ def mango_ingest(
     observer,
     regex,
     glob,
-    filter,
-    filter_kwargs,
+    filter_func,
+    filter_func_kwargs,
     ignore,
     ignore_glob,
     sync,
@@ -792,13 +801,13 @@ def mango_ingest(
                             f"Updated report file {report_file}", style="orange1 bold"
                         )
                     print(f"Reporting thread heartbeat", style="orange1 bold")
-                    time.sleep(60)
+                    # @todo decide to make this an option or not
+                    time.sleep(10)
 
             reporting_thread = threading.Thread(target=smart_save_results, daemon=True)
             reporting_thread.start()
             print("Reporting thread started", style="orange1")
             # add the report filename to the ignore list
-
             ignore_glob.append(result_filename_glob)
 
         #### Processing of arguments
@@ -833,7 +842,9 @@ def mango_ingest(
         restart_paths = []
         if restart:
             previous_result = json.loads(pathlib.Path(restart).read_text())
-            restart_paths = [path["name"] for path in previous_result["failed"]]
+            restart_paths = list(
+                set([path["name"] for path in previous_result["failed"]])
+            )
         # a bit special: sync_glob is only used to do a pre-monitoring sync
         # but the sync may also be called with the restart option only
         # in this case the passed sync_glob needs to be set to None
@@ -848,10 +859,16 @@ def mango_ingest(
                 metadata_handlers.append(
                     (extract_metadata_from_path, {"path_regex": path_e})
                 )
+        # check for custom filter_func
+        if filter_func and "." in filter_func:
+            (filter_module, filter_function) = filter_func.rsplit(".", 1)
+        filter_func_module = importlib.import_module(filter_module) if filter_func else None
+        filter_func = getattr(filter_func_module, filter_function) if filter_func_module else None
+        filter_func_kwargs = json.loads(filter_func_kwargs) if filter_func_kwargs else {}
 
         if sync or restart or no_watch:
-            print("First doing an initial sync", style="red")
-            do_initial_sync(
+            print("First doing an initial sync/restart", style="red")
+            do_initial_sync_and_or_restart(
                 irods_session,
                 path,
                 destination=destination,
@@ -859,18 +876,14 @@ def mango_ingest(
                 regex=regex,
                 glob=sync_glob,
                 ignore=ignore,
+                filter=filter_func,
+                filter_kwargs=filter_func_kwargs,
                 restart_paths=restart_paths,
                 verify_checksum=verify_checksum,
                 metadata_handlers=metadata_handlers,
             )
 
-        # check for custom filters
-        if filter and "." in filter:
-            (filter_module, filter_function) = filter.rsplit(".", 1)
-
-        filter_module = importlib.import_module(filter_module) if filter else None
-        filter = getattr(filter_module, filter_function) if filter_module else None
-        filter_kwargs = json.loads(filter_kwargs) if filter_kwargs else {}
+        
 
         if not no_watch:
             watcher = ManGOIngestWatcher(
@@ -878,8 +891,8 @@ def mango_ingest(
                 handler=ManGOIngestHandler(
                     path,
                     irods_destination=destination,
-                    filter=filter,
-                    filter_kwargs=filter_kwargs,
+                    filter=filter_func,
+                    filter_kwargs=filter_func_kwargs,
                     verify_checksum=verify_checksum,
                     metadata_handlers=metadata_handlers,
                     regexes=regex,  # class RegexMatchingEventHandler
@@ -937,7 +950,7 @@ def examples(ctx):
 @mango_ingest.command()
 @click.option("-o", "--output", default="mango_ingest_config.yaml")
 @click.pass_context
-def generate_config_template(ctx, output):
+def generate_config(ctx, output):
     """
     Generate a YAML config template
 
@@ -948,6 +961,20 @@ def generate_config_template(ctx, output):
     pathlib.Path(output).write_text(yaml_config)
 
     console.print(yaml_config)
+
+@mango_ingest.command()
+@click.pass_context
+def show(ctx):
+    """
+    Show parameter and values as would be used given the combination of config file, env variables, 
+    command line parameters (if any) and finally the built in defaults
+
+    """
+    options = ctx.obj
+    del options["ctx"]
+    # yaml output is pretty readable anyway, re-use some code 
+    current_config = yaml.safe_dump(options, default_flow_style=False, indent=2)
+    console.print(current_config)
 
 
 @mango_ingest.command()
