@@ -1,14 +1,19 @@
 destination: /zone/home/project/ingest
 do_dry_run: false
-filter: null
-filter_kwargs: null
-glob: '*.csv'
+filter_func: null
+filter_func_kwargs: null
+glob:
+- '*.py'
+- '*.md'
 ignore: []
 ignore_glob: []
+no_watch: false
 observer: native
 path: .
-recursive: false
+path_extract: []
+recursive: true
 regex: []
-sync: false
+restart: null
+sync: true
 verbose: true
-verify_checksum: true
+verify_checksum: false
