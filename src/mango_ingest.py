@@ -255,7 +255,7 @@ def extract_system_metadata_from_file(path: str, attributes=[]) -> dict:
 
     metadata_dict = {}
     mapping = {"original_modify_time": "st_mtime"}
-    stats = os.stat(path)
+    stats = pathlib.Path(path).stat()
     for attribute in attributes:
         try:
             value = getattr(stats, mapping[attribute])
