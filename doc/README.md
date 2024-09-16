@@ -1,0 +1,1 @@
+For now, use the --help option on the command line

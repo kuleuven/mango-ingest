@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import builtins
 import datetime
 import fnmatch
 import importlib
@@ -79,6 +80,9 @@ def print(*args, **kwargs):
     if print_output:
         console.log(*args, **kwargs)
 
+
+# now even go further, also imported modules will get the overridden print method
+builtins.print = print
 
 ## simple caching and re-use, to expand like mango flow/ mango portal with expiry checks?
 irods_session: iRODSSession | None = None
@@ -252,7 +256,7 @@ def check_filters(
         return True
 
     if filter:
-        print(f"validating against custom rule with {filter_kwargs}", style="bold blue")
+        print(f"validating against custom filter with {filter_kwargs}", style="bold blue")
         try:
             if not filter(file_path, **filter_kwargs):
                 print("external rule returned False", style="red bold")
@@ -277,7 +281,8 @@ class ManGOIngestWatcher(object):
         recursive: bool = False,
         observer: str = "native",
     ) -> None:
-        self.path = pathlib.Path(path).resolve()  # get full path
+        
+        self.path = pathlib.Path(path).absolute()  # get full path
         self.handler = handler
         self.recursive = recursive
         self.observer = (
@@ -301,9 +306,9 @@ class ManGOIngestWatcher(object):
                 expand=True,
             )
         )
-        ## make it interruptable from the terminal, with a clean exit
+        ## make it interruptable from the terminal, check if its alive and otherwise a clean exit
         try:
-            while True:
+            while self.observer.is_alive():
                 time.sleep(1)
         except:
             self.observer.stop()
@@ -380,7 +385,7 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
                 print(f"dry-run: would upload {file_path}")
                 return super().on_closed(event)
             irods_session = get_irods_session()
-            file_path = file_path.resolve()
+            file_path = file_path.absolute()
             upload_result = upload_to_irods(
                 irods_session=irods_session,
                 local_path=file_path,
@@ -584,7 +589,7 @@ def do_initial_sync_and_or_restart(
         ]
 
     for path_object in path_objects:
-        if path_object.is_file() and (full_path := path_object.resolve()):
+        if path_object.is_file() and (full_path := path_object.absolute()):
 
             print(f"sync {full_path}")
             if ignore and any(
@@ -658,14 +663,11 @@ def do_initial_sync_and_or_restart(
 # sub commands in this context are meant to be auxiliary
 @click.group(context_settings={"show_default": True}, invoke_without_command=True)
 # The many options start just here
-@click.option("-v", "--verbose", is_flag=True, help="Show runtime messages")
+@click.option("-v", "--verbose", count=True, help="Show runtime messages")
 @click.option("-r", "--recursive", is_flag=True, help="Also watch sub directories")
 @click.option("-p", "--path", default=".", help="The (local) path to monitor")
 @click.option(
-    "-d",
-    "--destination",
-    default=None,
-    help="iRODS destination collection path"
+    "-d", "--destination", default=None, help="iRODS destination collection path"
 )
 @click.option(
     "--observer",
@@ -723,14 +725,26 @@ def do_initial_sync_and_or_restart(
 )
 @click.option(
     "--path-extract",
+    "--metadata-path"
+    "path_extract",
     multiple=True,
     default=[],
     help="regular expression to extract metadata from the path [multiple]",
 )
 @click.option(
     "--add-modify-time-as-metadata",
+    "--metadata-mtime"
+    "add_modify_time_as_metadata",
     is_flag=True,
     help="Add the original modify time as metadata",
+)
+@click.option(
+    "--metadata-handler",
+    help="a custom PYPON_PATH accessible module.function to handle metadata",
+)
+@click.option(
+    "--metadata-handler-kwargs",
+    help="kwargs parameters for the metadata-handler as a json string",
 )
 @click.pass_context
 def mango_ingest(
@@ -753,6 +767,8 @@ def mango_ingest(
     no_watch,
     path_extract,
     add_modify_time_as_metadata,
+    metadata_handler,
+    metadata_handler_kwargs,
 ):
     """
     ManGO ingest is a lightweight tool to monitor a local directory for file changes and ingest (part of) them into iRODS.
@@ -815,8 +831,8 @@ def mango_ingest(
                 )
             )
 
-        # the local directory to watch
-        path = pathlib.Path(path).resolve()
+        # the local directory to watch 
+        path = pathlib.Path(path).absolute()
 
         # the parameters below are initially immutable tuples, make them mutable
         ignore_glob = list(ignore_glob)
@@ -891,7 +907,26 @@ def mango_ingest(
 
         # like mango flow: partials, but simpler :-)
         metadata_handlers = []
+        if metadata_handler:
+            # handler is just a string: in the form "<module>.<function>"
+            # <module> may be in itself also a hierarchy
 
+            (handler_module, handler_function) = metadata_handler.rsplit(".", 1)
+            handler_module = (
+                importlib.import_module(handler_module) if handler_module else None
+            )
+            handler_function = (
+                getattr(handler_module, handler_function)
+                if (handler_module and handler_function)
+                else None
+            )
+            metadata_handler_kwargs = (
+                json.loads(metadata_handler_kwargs) if metadata_handler_kwargs else {}
+            )
+            if handler_function:
+                metadata_handlers.append((handler_function, metadata_handler_kwargs))
+
+        # the built in metadata handler can be called as well :-)
         if path_extract:
             for path_e in list(path_extract):
                 metadata_handlers.append(
@@ -900,9 +935,15 @@ def mango_ingest(
         # check for custom filter_func
         if filter_func and "." in filter_func:
             (filter_module, filter_function) = filter_func.rsplit(".", 1)
-        filter_func_module = importlib.import_module(filter_module) if filter_func else None
-        filter_func = getattr(filter_func_module, filter_function) if filter_func_module else None
-        filter_func_kwargs = json.loads(filter_func_kwargs) if filter_func_kwargs else {}
+        filter_func_module = (
+            importlib.import_module(filter_module) if filter_func else None
+        )
+        filter_func = (
+            getattr(filter_func_module, filter_function) if filter_func_module else None
+        )
+        filter_func_kwargs = (
+            json.loads(filter_func_kwargs) if filter_func_kwargs else {}
+        )
 
         if add_modify_time_as_metadata:
             metadata_handlers.append(
@@ -928,8 +969,6 @@ def mango_ingest(
                 verify_checksum=verify_checksum,
                 metadata_handlers=metadata_handlers,
             )
-
-        
 
         if not no_watch:
             watcher = ManGOIngestWatcher(
@@ -1008,17 +1047,18 @@ def generate_config(ctx, output):
 
     console.print(yaml_config)
 
+
 @mango_ingest.command()
 @click.pass_context
 def show(ctx):
     """
-    Show parameter and values as would be used given the combination of config file, env variables, 
+    Show parameter and values as would be used given the combination of config file, env variables,
     command line parameters (if any) and finally the built in defaults
 
     """
     options = ctx.obj
     del options["ctx"]
-    # yaml output is pretty readable anyway, re-use some code 
+    # yaml output is pretty readable anyway, re-use some code
     current_config = yaml.safe_dump(options, default_flow_style=False, indent=2)
     console.print(current_config)
 
