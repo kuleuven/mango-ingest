@@ -209,6 +209,40 @@ def extract_metadata_from_path(
     return extracted_metadata
 
 
+def iso8601_format_timestamp(timestamp: float, timespec: str = "seconds") -> str:
+    """
+    Turns an float into an ISO 8601-compliant datetime object
+    """
+
+    formatted_timestamp = (
+        datetime.datetime.fromtimestamp(timestamp)
+        .astimezone(datetime.timezone.utc)
+        .isoformat(timespec=timespec)
+    )
+    return formatted_timestamp
+
+
+def extract_system_metadata_from_file(path: str, system_attributes=[]) -> dict:
+    """
+    Extracts system metadata from a file, and returns a dictionary with
+    key-value pairs.
+    """
+
+    metadata_dict = {}
+    mapping = {"original_modify_time": "st_mtime"}
+    stats = pathlib.Path(path).stat()
+    for attribute in system_attributes:
+        try:
+            value = getattr(stats, mapping[attribute])
+            if attribute.endswith("time"):
+                # let's assume it is a datetime we want to get
+                value = iso8601_format_timestamp(value)
+            metadata_dict[attribute] = value
+        except:
+            pass
+    return metadata_dict
+
+
 ## for use in the do_initial_sync function
 def check_filters(
     file_path: pathlib.Path, regexes=None, filter=None, filter_kwargs=None
@@ -693,6 +727,11 @@ def do_initial_sync_and_or_restart(
     default=[],
     help="regular expression to extract metadata from the path [multiple]",
 )
+@click.option(
+    "--add-modify-time-as-metadata",
+    is_flag=True,
+    help="Add the original modify time as metadata",
+)
 @click.pass_context
 def mango_ingest(
     ctx,
@@ -713,6 +752,7 @@ def mango_ingest(
     do_dry_run,
     no_watch,
     path_extract,
+    add_modify_time_as_metadata,
 ):
     """
     ManGO ingest is a lightweight tool to monitor a local directory for file changes and ingest (part of) them into iRODS.
@@ -863,6 +903,14 @@ def mango_ingest(
         filter_func_module = importlib.import_module(filter_module) if filter_func else None
         filter_func = getattr(filter_func_module, filter_function) if filter_func_module else None
         filter_func_kwargs = json.loads(filter_func_kwargs) if filter_func_kwargs else {}
+
+        if add_modify_time_as_metadata:
+            metadata_handlers.append(
+                (
+                    extract_system_metadata_from_file,
+                    {"system_attributes": ["original_modify_time"]},
+                )
+            )
 
         if sync or restart or no_watch:
             print("First doing an initial sync/restart", style="red")
