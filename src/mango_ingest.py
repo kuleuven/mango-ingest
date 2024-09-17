@@ -209,62 +209,37 @@ def extract_metadata_from_path(
     return extracted_metadata
 
 
-def iso8601_format_timestamp(timestamp: float) -> str:
+def iso8601_format_timestamp(timestamp: float, timespec: str = "seconds") -> str:
     """
     Turns an float into an ISO 8601-compliant datetime object
-
-    Arguments:
-        timestamp: float
-
-    Returns:
-        formatted_timestamp: str
-        A imestamp compliant with the ISO 8601 standard
     """
 
-    # The timestamp is converted from a string to a datetime object,
-    # so the timezone can be made explicit (offset to UTC),
-    # formatted following the ISO 8601 format,
-    # and has the granularity of seconds
-    # (since many Linux systems don't store more granularity)
     formatted_timestamp = (
         datetime.datetime.fromtimestamp(timestamp)
         .astimezone(datetime.timezone.utc)
-        .isoformat(timespec="seconds")
+        .isoformat(timespec=timespec)
     )
-    print(type(formatted_timestamp))
     return formatted_timestamp
 
 
-def extract_system_metadata_from_file(path: str, attributes=[]) -> dict:
+def extract_system_metadata_from_file(path: str, system_attributes=[]) -> dict:
     """
-    Extracts system metadata from a file
-
-    Arguments:
-        path : str
-            The local path to a file
-
-    Keyword Arguments:
-        attributes: list
-            A list of attributes from system metadata
-            which the user wants to extract
-
-    Returns:
-        metadata_dict:
-            A dictionary of attribute-value pairs
+    Extracts system metadata from a file, and returns a dictionary with
+    key-value pairs.
     """
 
     metadata_dict = {}
     mapping = {"original_modify_time": "st_mtime"}
     stats = pathlib.Path(path).stat()
-    for attribute in attributes:
+    for attribute in system_attributes:
         try:
             value = getattr(stats, mapping[attribute])
             if attribute.endswith("time"):
                 # let's assume it is a datetime we want to get
                 value = iso8601_format_timestamp(value)
+            metadata_dict[attribute] = value
         except:
-            value = "unknown"
-        metadata_dict[attribute] = value
+            pass
     return metadata_dict
 
 
@@ -918,7 +893,7 @@ def mango_ingest(
             metadata_handlers.append(
                 (
                     extract_system_metadata_from_file,
-                    {"attributes": ["original_modify_time"]},
+                    {"system_attributes": ["original_modify_time"]},
                 )
             )
 
