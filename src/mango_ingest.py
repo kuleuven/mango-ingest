@@ -49,7 +49,7 @@ class MangoIngestException(Exception):
 
 
 ##### global variables / objects
-print_output = False
+verbosity_level = 0
 dry_run = False
 console = Console()
 
@@ -75,9 +75,9 @@ result_filename_glob = "mango_ingest_results-*.json"
 
 
 ## python print() override using Rich
-def print(*args, **kwargs):
+def print(*args, verbosity = 1, **kwargs):
     """Override the Python built in print function with the rich library version and only really print when asked"""
-    if print_output:
+    if verbosity <= verbosity_level:
         console.log(*args, **kwargs)
 
 
@@ -89,13 +89,40 @@ irods_session: iRODSSession | None = None
 
 
 ## helper
-def get_upload_status_record(path: pathlib.Path) -> dict:
+def get_upload_status_record(path: pathlib.Path | str | iRODSDataObject, checksum = "") -> dict:
+
+    if isinstance(path, pathlib.Path):
+        return {
+            "path": str(path),
+            "finished": datetime.datetime.now(datetime.timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            "st_size": path.stat().st_size,
+            "st_mtime": path.stat().st_mtime,
+            "checksum": checksum,
+        }
+    if isinstance(path, str):
+        return {
+            "path": str(path),
+            "finished": datetime.datetime.now(datetime.timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            "checksum": checksum,
+        }
+    if isinstance(path, iRODSDataObject):
+        return {
+            "path": path.path,
+            "finished": datetime.datetime.now(datetime.timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            "checksum": checksum,
+        }
     return {
         "path": str(path),
         "finished": datetime.datetime.now(datetime.timezone.utc).isoformat(
-            timespec="seconds"
-        ),
-        "size": path.stat().st_size,
+                timespec="seconds"
+            ),
+        "checksum": checksum,
     }
 
 
@@ -182,7 +209,7 @@ def bulk_add_metadata(
                     )
                 )
         if len(avu_operations):
-            print(f"Adding metadata to {item.name}: {metadata_items}")
+            print(f"Adding metadata to {item.name}: {metadata_items}", verbosity=2)
             item.metadata(admin=as_admin).apply_atomic_operations(*avu_operations)
 
 
@@ -256,7 +283,7 @@ def check_filters(
         return True
 
     if filter:
-        print(f"validating against custom filter with {filter_kwargs}", style="bold blue")
+        print(f"validating against custom filter with {filter_kwargs}", style="bold blue", verbosity=2)
         try:
             if not filter(file_path, **filter_kwargs):
                 print("external rule returned False", style="red bold")
@@ -317,7 +344,7 @@ class ManGOIngestWatcher(object):
         # write out the report file before exiting
         report_file = pathlib.Path(self.path, result_filename)
         report_file.write_text(json.dumps(result, indent=2))
-        print(f"Updated report file {report_file}", style="orange1 bold")
+        print(f"Updated report file {report_file}", style="orange1 bold", verbosity=2)
 
         irods_session.cleanup()
         print("\n:waving_hand: Watcher terminated, have a nice day!", style="red bold")
@@ -346,6 +373,8 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
         """
         if self.ignore_directories and event.is_directory:
             return
+        
+        print(f"ManGO Ingest dispatcher: received file event {event}", verbosity=3)
 
         paths = []
         if hasattr(event, "dest_path"):
@@ -362,21 +391,22 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
     # on_closed is called when writing to a file has finished and the handler is closed
     def on_closed(self, event: FileSystemEvent) -> None:
         # exclude directory creation, we are ony interested in files (for now)
+        print(f"Event received of type {event}", verbosity=3)
         if not event.is_directory:
-            print(f"Added file {event.src_path}")
+            print(f"Added file {event.src_path}", verbosity=3)
             file_path = pathlib.Path(event.src_path)
-            print(f"And is interpreted by pathlib as {file_path}")
-            print(f"destination rel path is {file_path.relative_to(self.path)}")
+            print(f"And is interpreted by pathlib as {file_path}", verbosity=3)
+            print(f"destination rel path is {file_path.relative_to(self.path)}", verbosity=3)
 
             ## run external filter and return if it returns False or raises an exception, otherwise continue
             if self.filter:
                 print(
                     f"validating against external rule with {self.filter_kwargs}",
-                    style="bold blue",
+                    style="bold blue", verbosity=2
                 )
                 try:
                     if not self.filter(file_path, **self.filter_kwargs):
-                        print("external rule returned False", style="red bold")
+                        print("external rule returned False", style="red bold", verbosity=2)
                         return super().on_closed(event)
                 except Exception as e:
                     print(f"An error occurred with external validation: {e}")
@@ -394,11 +424,6 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
                 verify_checksum=self.verify_checksum,
                 metadata_handlers=self.metadata_handlers,
             )
-            if upload_result:
-                result["success"].append(get_upload_status_record(file_path))
-            else:
-                result["failed"].append(get_upload_status_record(file_path))
-            global latest_result_time
             latest_result_time = datetime.datetime.now(datetime.timezone.utc)
 
         return super().on_closed(event)
@@ -425,28 +450,10 @@ def irods_to_sha256_checksum(irods_checksum):
 
 
 # From Jef's code
-def compare_checksums(session, file_path, data_object_path):
+def validate_checksums(session: iRODSSession, file_path: str, data_object_path: str):
     """Check whether the checksum of a local file matches its iRODS equivalent
 
-
-    Arguments
-    ---------
-    session: obj
-        An iRODSSession object
-
-    file_path: str
-        The path of a local file
-        Please provide a full path
-
-    data_object_path: str
-        The path to a data object in iRODS
-        Please provide a full path.
-
-    Returns
-    -------
-
-    do_checksums_match: bool
-        True if sizes match, False in case of a mismatch.
+    If succesful, returns the sha256 checksum
     """
 
     try:
@@ -468,8 +475,10 @@ def compare_checksums(session, file_path, data_object_path):
             for chunk in iter(lambda: file.read(BUFFER), b""):
                 hash_sha256.update(chunk)
         local_checksum_sha256 = hash_sha256.hexdigest()
-
-        return local_checksum_sha256 == irods_checksum_sha256
+        if local_checksum_sha256 == irods_checksum_sha256:
+            return local_checksum_sha256
+        else:
+            return False
     except Exception as e:
         # Function will fail if data object doesn't exist
         print(
@@ -532,6 +541,7 @@ def upload_to_irods(
     # with replica status, then size comparison and if requested the (cpu and i/o expensive) checksum validation.
     # The 'and' operation ensures if the "easier" validation rule fails, the next expensive validation rule is not
     # unnecessarily executed
+    local_checksum = ""
     if (
         check_data_object_replica_status(result_object)
         and (result_object.size == local_path.stat().st_size)
@@ -539,7 +549,7 @@ def upload_to_irods(
             not verify_checksum
             or (
                 verify_checksum
-                and compare_checksums(irods_session, str(local_path), dst_path)
+                and (local_checksum := validate_checksums(irods_session, str(local_path), dst_path))
             )
         )
     ):
@@ -555,10 +565,12 @@ def upload_to_irods(
                 print(
                     f"Added {len(metadata_dict)} metadata items to {result_object.name}"
                 )
-
+        result["success"].append(get_upload_status_record(local_path, checksum=local_checksum))
+    
         return result_object
     else:
         print(f"Failed uploading {local_path} to irods {dst_path}")
+        result["failed"].append(get_upload_status_record(local_path, checksum=local_checksum))
         return False
 
 
@@ -591,11 +603,11 @@ def do_initial_sync_and_or_restart(
     for path_object in path_objects:
         if path_object.is_file() and (full_path := path_object.absolute()):
 
-            print(f"sync {full_path}")
+            print(f"sync {full_path}", verbosity=2)
             if ignore and any(
                 [re.search(pattern, str(full_path)) for pattern in ignore]
             ):
-                print(f"ignoring {full_path}")
+                print(f"ignoring {full_path}", verbosity=2)
                 continue
 
             if check_filters(
@@ -616,7 +628,7 @@ def do_initial_sync_and_or_restart(
                     irods_path = str(pathlib.PurePath(destination, str(rel_local_path)))
                     irods_data_object = irods_session.data_objects.get(irods_path)
                     if full_path.stat().st_size == irods_data_object.size:
-                        if verify_checksum and compare_checksums(
+                        if verify_checksum and validate_checksums(
                             irods_session, str(full_path), irods_path
                         ):
                             result["ignored"].append(
@@ -653,7 +665,7 @@ def do_initial_sync_and_or_restart(
                 result["ingnored"].append(get_upload_status_record(full_path))
                 continue
         else:
-            print(f" did not treat local dir {path_object}")
+            print(f" did not treat local dir {path_object}", verbosity=2)
     # not needed, but semantically correct:
     return result
 
@@ -783,11 +795,21 @@ def mango_ingest(
 
     Ignore patterns `--ignore-glob` and regular expressions `--ignore` are evaluated before any `--glob` and/or `--regex`
 
+    CUSTOM FILTERS
 
-
-    Custom filters can be specified too with --filter, if they are resolvable with a dynamic import. The parameter is a string defining the name of the
+    Custom filters can be specified too with --custom-filter, if they are resolvable with a dynamic import. The parameter is a string defining the name of the
     module nf function in the form `<module>.<function>` and that functions takes as the first positional parameter the `pathlib.Path`
     parameter of the file to validate, followed by an optional set of kwargs parameters. See also the option `--filter-kwargs` which accepts a dict/json string.
+
+    METADATA 
+
+    In addition, there are a number of ways to add metadata on the fly. A few builtin functions cover the case for 
+    some rather obvious ones like metadata that is included in the path `--path-extract` and file system properties
+    such as modified time `TO BE DETERMINED` and symlink information
+
+    You can also add your custom handler much in the same way as you can add custom filters, see `--help` and the --metadata-handler option.
+    An example is also included in `doc/examples/extract_metadata.py` which relies on the exiftool executable and corresponding
+    Pyhon module. 
 
     ENVIRONTMENT VARIABLES
 
@@ -804,7 +826,10 @@ def mango_ingest(
 
     Besides command line options, environment variables, you can also specify a Yaml formatted configuration file
     through the environment variable `MANGO_INGEST_CONFIG`. This can hold all or a subset of the command line options.
-    It acts as a "default" setting for each option, and the value specified by the command line option or environment variable takes precedence.
+    It acts as a "default" setting for each option, and the value specified by the command line option 
+    or environment variable takes precedence.
+
+    The builtin sub command `generate-config` will create such a yaml formatted config file for you.
 
     """
 
@@ -816,10 +841,11 @@ def mango_ingest(
         # since the option is not marked as required in order to have the option fall back
         # through environment variables and/or config file, we need to check and get it here
         if not destination:
-            destination = click.prompt("Please enter an iRODS destination path")
+            destination = click.prompt("Please enter an iRODS destination patha")
+        
         if verbose or do_dry_run:
-            global print_output
-            print_output = True
+            global verbosity_level
+            verbosity_level = verbose if verbose else 0
         if do_dry_run:
             global dry_run
             dry_run = True
@@ -859,14 +885,14 @@ def mango_ingest(
                         print(
                             f"Updated report file {report_file}", style="orange1 bold"
                         )
-                    print(f"Reporting thread heartbeat", style="orange1 bold")
+                    print(f"Reporting thread heartbeat", style="orange1 bold", verbosity=2)
                     # @todo decide to make this an option or not
                     time.sleep(10)
 
             reporting_thread = threading.Thread(target=smart_save_results, daemon=True)
             reporting_thread.start()
             print("Reporting thread started", style="orange1")
-            # add the report filename to the ignore list
+            # add the report filename (global variable in this script) to the ignore list
             ignore_glob.append(result_filename_glob)
 
         #### Processing of arguments
