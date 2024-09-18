@@ -67,7 +67,7 @@ latest_result_time = datetime.datetime.now(datetime.timezone.utc)
 
 result_file_timestring = datetime.datetime.now(datetime.timezone.utc).isoformat(
     timespec="seconds"
-)
+).replace(':','')
 result_filename = f"mango_ingest_results-{result_file_timestring}.json"
 # for use in ignoring the results file for ingestion
 result_filename_glob = "mango_ingest_results-*.json"
@@ -736,26 +736,28 @@ def do_initial_sync_and_or_restart(
     help="Do not start monitoring for future changes, implies --sync",
 )
 @click.option(
-    "--path-extract",
-    "--metadata-path"
+    "--metadata-path",
+    "--md-path",
     "path_extract",
     multiple=True,
     default=[],
     help="regular expression to extract metadata from the path [multiple]",
 )
 @click.option(
-    "--add-modify-time-as-metadata",
-    "--metadata-mtime"
+    "--metadata-mtime",
+    "--md-mtime",
     "add_modify_time_as_metadata",
     is_flag=True,
     help="Add the original modify time as metadata",
 )
 @click.option(
     "--metadata-handler",
+    "--md-handler",
     help="a custom PYPON_PATH accessible module.function to handle metadata",
 )
 @click.option(
     "--metadata-handler-kwargs",
+    "--md-handler-kwargs",
     help="kwargs parameters for the metadata-handler as a json string",
 )
 @click.pass_context
