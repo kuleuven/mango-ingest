@@ -738,7 +738,6 @@ def do_initial_sync_and_or_restart(
 @click.option(
     "--metadata-path",
     "--md-path",
-    "path_extract",
     multiple=True,
     default=[],
     help="regular expression to extract metadata from the path [multiple]",
@@ -746,7 +745,6 @@ def do_initial_sync_and_or_restart(
 @click.option(
     "--metadata-mtime",
     "--md-mtime",
-    "add_modify_time_as_metadata",
     is_flag=True,
     help="Add the original modify time as metadata",
 )
@@ -779,8 +777,8 @@ def mango_ingest(
     restart,
     do_dry_run,
     no_watch,
-    path_extract,
-    add_modify_time_as_metadata,
+    metadata_path,
+    metadata_mtime,
     metadata_handler,
     metadata_handler_kwargs,
 ):
@@ -955,8 +953,8 @@ def mango_ingest(
                 metadata_handlers.append((handler_function, metadata_handler_kwargs))
 
         # the built in metadata handler can be called as well :-)
-        if path_extract:
-            for path_e in list(path_extract):
+        if metadata_path:
+            for path_e in list(metadata_path):
                 metadata_handlers.append(
                     (extract_metadata_from_path, {"path_regex": path_e})
                 )
@@ -973,7 +971,7 @@ def mango_ingest(
             json.loads(filter_func_kwargs) if filter_func_kwargs else {}
         )
 
-        if add_modify_time_as_metadata:
+        if metadata_mtime:
             metadata_handlers.append(
                 (
                     extract_system_metadata_from_file,
