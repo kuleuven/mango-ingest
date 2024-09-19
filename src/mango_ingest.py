@@ -804,12 +804,12 @@ def mango_ingest(
     METADATA 
 
     In addition, there are a number of ways to add metadata on the fly. A few builtin functions cover the case for 
-    some rather obvious ones like metadata that is included in the path `--path-extract` and file system properties
-    such as modified time `TO BE DETERMINED` and symlink information
+    some rather obvious ones like metadata that is included in the path `--metadata-path` or shorter `--md-path` and file system properties
+    such as modified time `--metadata-mtime` and symlink information
 
-    You can also add your custom handler much in the same way as you can add custom filters, see `--help` and the --metadata-handler option.
+    You can also add your custom handler much in the same way as you can add custom filters, see `--help` and the `--metadata-handler` option.
     An example is also included in `doc/examples/extract_metadata.py` which relies on the exiftool executable and corresponding
-    Pyhon module. 
+    Python module. 
 
     ENVIRONTMENT VARIABLES
 

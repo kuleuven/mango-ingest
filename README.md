@@ -8,8 +8,8 @@ for continous operations. It has also the benefit of adapting to the
 local file system on windows, mac or linux  to use the native, low overhead listeners for changes.
 
 The main purpose it to be an easy entry point for ingestion of files 
-into iRODS, from where possibly a ManGO Flow task will pick up and 
-handle further processing
+into iRODS, from where possibly another workflow (like a ManGO Flow task) will pick up and 
+handle further processing.
 
 
 ## Installation
@@ -33,6 +33,9 @@ $ mango_ingest --help
 
 Just checkout the repository and copy the script `mango_ingest.py` around to where you want to execute it
 
+### Authentication
+
+Authentication is done by creating an `iRODSSession` from a configuration file either as specified by the environment variable `IRODS_ENVIRONMENT_FILE` or with a fallback to the current user `~/.irods/irods_environment.json`.
 
 ## Usage
 
@@ -60,13 +63,14 @@ Just checkout the repository and copy the script `mango_ingest.py` around to whe
 
   In addition, there are a number of ways to add metadata on the fly. A few
   builtin functions cover the case for  some rather obvious ones like metadata
-  that is included in the path `--path-extract` and file system properties
-  such as modified time `TO BE DETERMINED` and symlink information
+  that is included in the path `--metadata-path` or shorter `--md-path` and
+  file system properties such as modified time `--metadata-mtime` and symlink
+  information
 
   You can also add your custom handler much in the same way as you can add
-  custom filters, see `--help` and the --metadata-handler option. An example
+  custom filters, see `--help` and the `--metadata-handler` option. An example
   is also included in `doc/examples/extract_metadata.py` which relies on the
-  exiftool executable and corresponding Pyhon module.
+  exiftool executable and corresponding Python module.
 
   ENVIRONTMENT VARIABLES
 
