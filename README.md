@@ -1,15 +1,15 @@
 
 ## Purpose
 
-ManGO ingest is a lightweight tool to monitor a local directory for file
-changes and copy (part of) them into iRODS. There is no need for 
-cronjobs as as it is based on python watchdog which starts its own threads
-for continous operations. It has also the benefit of adapting to the 
-local file system on windows, mac or linux  to use the native, low overhead listeners for changes.
 
-The main purpose it to be an easy entry point for ingestion of files 
-into iRODS, from where possibly another workflow (like a ManGO Flow task) will pick up and 
-handle further processing.
+ManGO ingest is a lightweight tool to monitor a local directory for file
+changes and ingest (part of) them into iRODS. There is no need for cronjobs
+as it is based on python watchdog which starts its own threads for continous
+operations.
+
+The main purpose it to be an easy entry point for ingestion of files into
+iRODS, from where possibly a ManGO Flow task will pick up and handle further
+processing
 
 
 ## Installation
@@ -62,7 +62,7 @@ Authentication is done by creating an `iRODSSession` from a configuration file e
   METADATA
 
   In addition, there are a number of ways to add metadata on the fly. A few
-  builtin functions cover the case for  some rather obvious ones like metadata
+  builtin functions cover the case for some rather obvious ones like metadata
   that is included in the path `--metadata-path` or shorter `--md-path` and
   file system properties such as modified time `--metadata-mtime` and symlink
   information
@@ -89,7 +89,7 @@ Authentication is done by creating an `iRODSSession` from a configuration file e
   Yaml formatted configuration file through the environment variable
   `MANGO_INGEST_CONFIG`. This can hold all or a subset of the command line
   options. It acts as a "default" setting for each option, and the value
-  specified by the command line option  or environment variable takes
+  specified by the command line option or environment variable takes
   precedence.
 
   The builtin sub command `generate-config` will create such a yaml formatted
@@ -102,11 +102,17 @@ Options:
   -p, --path TEXT                 The (local) path to monitor  [default: .]
   -d, --destination TEXT          iRODS destination collection path
   --observer [native|polling]     The observer system to use for getting
-                                  changed paths. Defaults to 'native' which is
-                                  recommended, but you can use also 'polling'
-                                  to select a brute force algorithm, which can
-                                  be needed for network mounted drives for
-                                  example  [default: native]
+                                  changed paths. Defaults to 'polling' which
+                                  is recommended for most use cases, but you
+                                  can use also 'native' in for linux/mac
+                                  filesystems when watching for new files that
+                                  are directly written into the
+                                  directorypolling is a rather brute force
+                                  algorithm, needed for network mounted drives
+                                  and windows for example  [default: polling]
+  --polling-interval INTEGER      Polling interval in seconds in case the
+                                  observer is specified as 'polling'
+                                  [default: 5]
   --regex TEXT                    regular expression to match [multiple]
   --glob TEXT                     glob expression to match as a simpler
                                   alternative to --regex [multiple]
@@ -145,4 +151,5 @@ Commands:
   examples         Examples
   generate-config  Generate a YAML config template
   show             Show parameter and values as would be used given the...
+
 ```
