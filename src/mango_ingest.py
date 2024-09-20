@@ -324,7 +324,8 @@ class ManGOIngestWatcher(object):
         self.observer = (
             # naming: in case of PollingObserver, timeout functions as an interval
             PollingObserver(timeout=polling_interval) if observer == "polling" else Observer()
-        )  # so "native" by default uses Observer() which itself will adapt according to the client platform
+        )
+        self.polling_interval = polling_interval
 
     def run(self):
         self.observer.schedule(self.handler, self.path, recursive=self.recursive)
@@ -337,6 +338,7 @@ class ManGOIngestWatcher(object):
                     f"ManGO Ingest is now monitoring {os.path.abspath(self.path)}\n"
                     f"Recursive: {self.recursive}\n"
                     f"Observer: {type(self.observer)}\n"
+                    f"Polling interval: {self.polling_interval if isinstance(self.observer, PollingObserver) else 'NA'} sec\n"
                     f"Handler applied: {rich.pretty.pretty_repr(self.handler)}"
                 ),
                 style="green bold",
@@ -818,6 +820,7 @@ def mango_ingest(
     path,
     destination,
     observer,
+    polling_interval,
     regex,
     glob,
     filter_func,
@@ -1065,6 +1068,7 @@ def mango_ingest(
                 ),
                 recursive=recursive,
                 observer=observer,
+                polling_interval=polling_interval,
             )
             watcher.run()
         else:
