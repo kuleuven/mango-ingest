@@ -11,6 +11,11 @@ The main purpose it to be an easy entry point for ingestion of files into
 iRODS, from where possibly a ManGO Flow task will pick up and handle further
 processing
 
+## Current state of supported platforms: beta software
+
+The initial development is focusing on Linux, but the target platforms are 
+also including Windows and Mac OS. It may or may not work for you (yet), please
+use the issue tracker to report on your findings/use cases and more..
 
 ## Installation
 
