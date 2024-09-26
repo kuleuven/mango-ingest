@@ -90,6 +90,10 @@ builtins.print = print
 irods_session: iRODSSession | None = None
 
 
+def now_as_utc_timestamp() -> float:
+    return datetime.datetime.now(tz=datetime.timezone.utc).timestamp()
+
+
 ## helper
 def get_upload_status_record(
     path: pathlib.Path | str | iRODSDataObject, checksum=""
@@ -305,6 +309,20 @@ def check_filters(
     return True
 
 
+# ## helper function
+
+# def file_is_at_rest(path:str, during: float = 3):
+#     # simple strategy, we check te modified times and size
+#     pl_path = pathlib.Path(path)
+#     inital_mtime = pl_path.stat().st_mtime
+#     initial_size = pl_path.stat().st_size
+#     time.sleep(during)
+#     if pl_path.stat().st_mtime != inital_mtime or pl_path.stat().st_size != initial_size:
+#         return False
+#     print(f"File {path} is considered at rest on {iso8601_format_timestamp(inital_mtime)}, untouched for {during} seconds")
+#     return True
+
+
 ## watcher class
 class ManGOIngestWatcher(object):
     """ """
@@ -315,15 +333,17 @@ class ManGOIngestWatcher(object):
         handler=FileSystemEventHandler(),
         recursive: bool = False,
         observer: str = "polling",
-        polling_interval = 5
+        polling_interval=5,
     ) -> None:
-        
+
         self.path = pathlib.Path(path).absolute()  # get full path
         self.handler = handler
         self.recursive = recursive
         self.observer = (
             # naming: in case of PollingObserver, timeout functions as an interval
-            PollingObserver(timeout=polling_interval) if observer == "polling" else Observer()
+            PollingObserver(timeout=polling_interval)
+            if observer == "polling"
+            else Observer()
         )
         self.polling_interval = polling_interval
 
@@ -373,7 +393,92 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
         self.filter_kwargs = kwargs.pop("filter_kwargs", None)
         self.verify_checksum = kwargs.pop("verify_checksum", False)
         self.metadata_handlers = kwargs.pop("metadata_handlers", [])
+
+        self.delay_queue = {}
+        self.delay_queue_last_visit = None
+        self.delay_queue_lock = threading.Lock()
+
+        # setup the queue handler
+
+        interval = kwargs.pop("queue_interval", 10)
+        time_at_rest_criterion = kwargs.pop("time_at_rest_criterion", 30)
+        queue_thread = threading.Thread(
+            target=self.process_delay_queue,
+            kwargs={
+                "interval": interval,
+                "time_at_rest_criterion": time_at_rest_criterion,
+            },
+            daemon=True,
+        )
+        queue_thread.start()
+
         super().__init__(**kwargs)
+
+    def delay_event(self, event: FileSystemEvent):
+        self.delay_queue_lock.acquire()
+        self.delay_queue[event.src_path] = {
+            "event": event,
+            "event_timestamp": now_as_utc_timestamp(),
+            "event_path_mtime": pathlib.Path(event.src_path).stat().st_mtime,
+        }
+        self.delay_queue_lock.release()
+    
+    def remove_delay_event_via_path(self, path: str):
+        self.delay_queue_lock.acquire()
+        self.delay_queue.pop(path, None)
+        self.delay_queue_lock.release()
+
+
+    def process_delay_queue(
+        self, interval: float = 10, time_at_rest_criterion: float = 30
+    ):
+        print(
+            f"Delay queue started with interval {interval} and time at rest {time_at_rest_criterion}",
+            verbosity=3,
+        )
+        while True:
+            self.path_to_treat = None
+            self.event_to_treat = None
+            self.delay_queue_last_visit = now_as_utc_timestamp()
+            self.delay_queue_lock.acquire()
+            print(
+                f"Processing {len(self.delay_queue)} items in delay queue", verbosity=2
+            )
+            for path, item in self.delay_queue.items():
+                # check if mtime has changed since the recorded mtime
+                # and set the delay_queue value of it to the new one if it has changed
+                # if it has not changed, look up the event_timestamp, this should
+                # also be older than the time_at_rest_criterion
+                current_path_mtime = pathlib.Path(path).stat().st_mtime
+                now_as_timestamp = now_as_utc_timestamp()
+                if current_path_mtime != item["event_path_mtime"]:
+                    # set to the reported value, which for whatever reason can be far different from now()
+                    self.delay_queue[path]["event_path_mtime"] = current_path_mtime
+                    self.delay_queue[path]["event_timestamp"] = now_as_timestamp
+                    continue
+                elif (
+                    now_as_timestamp
+                    < self.delay_queue[path]["event_timestamp"] + time_at_rest_criterion
+                ):
+                    continue
+                else:
+                    # found an eligible path !
+                    self.path_to_treat = path
+                    # break out of the for loop
+                    print(f"Delay queue: found an eligible path: {path}", verbosity=3)
+                    break
+            # allow new elements in queue
+            self.delay_queue_lock.release()
+            # now handle the event
+            if self.path_to_treat:
+                item_to_treat = self.delay_queue.pop(self.path_to_treat)
+                self.handle_event(event=item_to_treat["event"])
+
+            # sleep if we need to
+            if (
+                elapsed := (now_as_utc_timestamp() - self.delay_queue_last_visit)
+            ) < interval:
+                time.sleep(interval - elapsed)
 
     ## Override dispatch to use re.search instead of re.match
     def dispatch(self, event: FileSystemEvent) -> None:
@@ -403,15 +508,10 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
 
     def handle_event(self, event: FileSystemEvent):
         # exclude directory creation, we are ony interested in files (for now)
-        print(f"Event received of type {event}", verbosity=3)
+        # print(f"Event received of type {event}", verbosity=3)
         if not event.is_directory:
-            print(f"Added file {event.src_path}", verbosity=3)
+            print(f"Handling file {event.src_path}", verbosity=3)
             file_path = pathlib.Path(event.src_path)
-            print(f"And is interpreted by pathlib as {file_path}", verbosity=3)
-            print(
-                f"destination rel path is {file_path.relative_to(self.path)}",
-                verbosity=3,
-            )
 
             ## run external filter and return if it returns False or raises an exception, otherwise continue
             if self.filter:
@@ -446,27 +546,33 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
             )
             global latest_result_time
             latest_result_time = datetime.datetime.now(datetime.timezone.utc)
+        return
 
     # on_closed is called when writing to a file has finished and the handler is closed
     # native for linux
     def on_closed(self, event: FileSystemEvent) -> None:
 
-        if self.observer == "native":
-            self.handle_event(event=event)
+        # remove delay queue entry for this path if it exists, otherwise
+        # it may be uploaded twice
+        self.remove_delay_event_via_path(event.src_path)
+        self.handle_event(event=event)
 
         return super().on_closed(event)
 
     def on_modified(self, event: FileSystemEvent) -> None:
-
+        self.delay_event(event=event)
+        # in case of polling observer, print out a level 3 message
+        # for native observer, its an avalanche with larger files, so
+        # print nothing
         if self.observer == "polling":
-            self.handle_event(event=event)
+            print(f"Sent modified event to the delay queue for {event.src_path}", verbosity=3)
+
         return super().on_modified(event)
-    
+
     def on_created(self, event: FileSystemEvent) -> None:
-
-        if self.observer == "polling":
-            self.handle_event(event=event)
-        return super().on_modified(event)
+        self.delay_event(event=event)
+        print(f"Sent created event to the delay queue for {event.src_path}", verbosity=3)
+        return super().on_created(event)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}\n {pprint.pformat(self.__dict__)}"
@@ -554,7 +660,7 @@ def upload_to_irods(
     if rel_local_parent:
         irods_mkdir_p(
             irods_session,
-            str(pathlib.PurePath(irods_collection, str(rel_local_parent))),
+            str(pathlib.PurePosixPath(irods_collection, str(rel_local_parent.as_posix()))),
         )
 
     # utility iterator to read the local file in chunks: saves local disk space(!) and feeds a
@@ -567,7 +673,8 @@ def upload_to_irods(
             yield data
 
     # consruct the irods destination full path
-    dst_path = str(pathlib.PurePath(irods_collection, str(rel_local_path)))
+    dst_path = str(pathlib.PurePosixPath(irods_collection, str(rel_local_path.as_posix())))
+    print(f"Destination path for upload is {dst_path}", verbosity=2)
     # make the local read buffer 32MB
     buffering = 32 * 1024 * 1024
     # open the file with cool 'Rich' progress bar as a console display asset which implictely decorates a regular open()
@@ -740,7 +847,7 @@ def do_initial_sync_and_or_restart(
 )
 @click.option(
     "--polling-interval",
-    default = 5,
+    default=5,
     help="Polling interval in seconds in case the observer is specified as 'polling'",
 )
 @click.option(
@@ -1064,6 +1171,7 @@ def mango_ingest(
                     metadata_handlers=metadata_handlers,
                     regexes=regex,  # class RegexMatchingEventHandler
                     ignore_regexes=ignore,  # class RegexMatchingEventHandler
+                    ignore_directories=True,  # class RegexMatchingEventHandler
                     observer=observer,
                 ),
                 recursive=recursive,
