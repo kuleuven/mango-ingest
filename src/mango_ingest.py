@@ -660,7 +660,7 @@ def upload_to_irods(
     if rel_local_parent:
         irods_mkdir_p(
             irods_session,
-            str(pathlib.PurePath(irods_collection, str(rel_local_parent))),
+            str(pathlib.PurePosixPath(irods_collection, str(rel_local_parent.as_posix()))),
         )
 
     # utility iterator to read the local file in chunks: saves local disk space(!) and feeds a
@@ -673,7 +673,8 @@ def upload_to_irods(
             yield data
 
     # consruct the irods destination full path
-    dst_path = str(pathlib.PurePath(irods_collection, str(rel_local_path)))
+    dst_path = str(pathlib.PurePosixPath(irods_collection, str(rel_local_path.as_posix())))
+    print(f"Destination path for upload is {dst_path}", verbosity=2)
     # make the local read buffer 32MB
     buffering = 32 * 1024 * 1024
     # open the file with cool 'Rich' progress bar as a console display asset which implictely decorates a regular open()
