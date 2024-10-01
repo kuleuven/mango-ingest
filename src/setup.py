@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='mango_ingest',
-    version='0.9.1',
+    version='0.9.2',
     py_modules=['mango_ingest'],
     install_requires=[
         'Click',
