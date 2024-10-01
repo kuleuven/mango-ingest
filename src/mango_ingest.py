@@ -31,6 +31,7 @@ from irods.collection import iRODSCollection
 from irods.data_object import iRODSDataObject
 from irods.meta import AVUOperation, iRODSMeta
 from irods.session import iRODSSession
+from irods.version import version_as_string, version_as_tuple
 from rich.console import Console
 from rich.markup import escape
 from rich.pretty import Pretty
@@ -49,9 +50,16 @@ class MangoIngestException(Exception):
 
 
 ##### global variables / objects
+
+## basic runtime control
 verbosity_level = 0
 dry_run = False
 console = Console()
+# adaptive sleep times enabler, this variable is controlled by the core
+# upload_to_irods function
+busy_uploading = False
+# for PRC >=2.1.0, use native callback for progressbar
+progress_bar_irods = True if version_as_tuple() >= (2,1,0) else False
 
 ## global result variables
 result = {
@@ -94,7 +102,7 @@ def now_as_utc_timestamp() -> float:
     return datetime.datetime.now(tz=datetime.timezone.utc).timestamp()
 
 
-## helper
+## helper for reporting
 def get_upload_status_record(
     path: pathlib.Path | str | iRODSDataObject, checksum=""
 ) -> dict:
@@ -309,20 +317,6 @@ def check_filters(
     return True
 
 
-# ## helper function
-
-# def file_is_at_rest(path:str, during: float = 3):
-#     # simple strategy, we check te modified times and size
-#     pl_path = pathlib.Path(path)
-#     inital_mtime = pl_path.stat().st_mtime
-#     initial_size = pl_path.stat().st_size
-#     time.sleep(during)
-#     if pl_path.stat().st_mtime != inital_mtime or pl_path.stat().st_size != initial_size:
-#         return False
-#     print(f"File {path} is considered at rest on {iso8601_format_timestamp(inital_mtime)}, untouched for {during} seconds")
-#     return True
-
-
 ## watcher class
 class ManGOIngestWatcher(object):
     """ """
@@ -393,15 +387,15 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
         self.filter_kwargs = kwargs.pop("filter_kwargs", None)
         self.verify_checksum = kwargs.pop("verify_checksum", False)
         self.metadata_handlers = kwargs.pop("metadata_handlers", [])
+        interval = kwargs.pop("queue_interval", 10)
+        time_at_rest_criterion = kwargs.pop("time_at_rest_criterion", 4)
 
+        # delay queue
         self.delay_queue = {}
         self.delay_queue_last_visit = None
         self.delay_queue_lock = threading.Lock()
 
-        # setup the queue handler
-
-        interval = kwargs.pop("queue_interval", 10)
-        time_at_rest_criterion = kwargs.pop("time_at_rest_criterion", 30)
+        # setup the delay queue handler thread
         queue_thread = threading.Thread(
             target=self.process_delay_queue,
             kwargs={
@@ -422,12 +416,12 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
             "event_path_mtime": pathlib.Path(event.src_path).stat().st_mtime,
         }
         self.delay_queue_lock.release()
-    
+        print(f"Queued {event.src_path}", verbosity=2)
+
     def remove_delay_event_via_path(self, path: str):
         self.delay_queue_lock.acquire()
         self.delay_queue.pop(path, None)
         self.delay_queue_lock.release()
-
 
     def process_delay_queue(
         self, interval: float = 10, time_at_rest_criterion: float = 30
@@ -437,8 +431,7 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
             verbosity=3,
         )
         while True:
-            self.path_to_treat = None
-            self.event_to_treat = None
+            self.path_list_to_treat = []
             self.delay_queue_last_visit = now_as_utc_timestamp()
             self.delay_queue_lock.acquire()
             print(
@@ -463,22 +456,29 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
                     continue
                 else:
                     # found an eligible path !
-                    self.path_to_treat = path
-                    # break out of the for loop
-                    print(f"Delay queue: found an eligible path: {path}", verbosity=3)
-                    break
-            # allow new elements in queue
+                    self.path_list_to_treat.append(path)
+                    print(
+                        f"Delay queue: added an eligible path to process: {path}",
+                        verbosity=3,
+                    )
+            # allow new elements to be added in the delay queue
             self.delay_queue_lock.release()
-            # now handle the event
-            if self.path_to_treat:
-                item_to_treat = self.delay_queue.pop(self.path_to_treat)
-                self.handle_event(event=item_to_treat["event"])
+            # now handle the path event(s)
+            if self.path_list_to_treat:
+                for path_to_treat in self.path_list_to_treat:
+                    item_to_treat = self.delay_queue.pop(path_to_treat)
+                    try:
+                        self.handle_event(event=item_to_treat["event"])
+                    except Exception as e:
+                        console.log(f"Error while handling {path_to_treat}: {e}")
 
-            # sleep if we need to
+            # sleep if we need to, usually not too much sleep needed unless
+            # native or other signals trigger a direct long running action
+            use_interval = interval if busy_uploading else 1
             if (
                 elapsed := (now_as_utc_timestamp() - self.delay_queue_last_visit)
-            ) < interval:
-                time.sleep(interval - elapsed)
+            ) < use_interval:
+                time.sleep(use_interval - elapsed)
 
     ## Override dispatch to use re.search instead of re.match
     def dispatch(self, event: FileSystemEvent) -> None:
@@ -555,7 +555,10 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
         # remove delay queue entry for this path if it exists, otherwise
         # it may be uploaded twice
         self.remove_delay_event_via_path(event.src_path)
-        self.handle_event(event=event)
+        try:
+            self.handle_event(event=event)
+        except Exception as e:
+            console.log(f"Exception in on_closed handling for {event.src_path}: {e}")
 
         return super().on_closed(event)
 
@@ -565,13 +568,18 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
         # for native observer, its an avalanche with larger files, so
         # print nothing
         if self.observer == "polling":
-            print(f"Sent modified event to the delay queue for {event.src_path}", verbosity=3)
+            print(
+                f"Sent modified event to the delay queue for {event.src_path}",
+                verbosity=3,
+            )
 
         return super().on_modified(event)
 
     def on_created(self, event: FileSystemEvent) -> None:
         self.delay_event(event=event)
-        print(f"Sent created event to the delay queue for {event.src_path}", verbosity=3)
+        print(
+            f"Sent created event to the delay queue for {event.src_path}", verbosity=3
+        )
         return super().on_created(event)
 
     def __repr__(self) -> str:
@@ -642,6 +650,9 @@ def upload_to_irods(
     verify_checksum=False,
     metadata_handlers: list[(Callable, dict)] = [],
 ):
+    ## update the global busy uploading flag
+    global busy_uploading
+    busy_uploading = True
     ## check if the object is in a local sub directory
     # start assuming it is not..
     rel_local_parent = None  # kinda '.'
@@ -660,28 +671,62 @@ def upload_to_irods(
     if rel_local_parent:
         irods_mkdir_p(
             irods_session,
-            str(pathlib.PurePosixPath(irods_collection, str(rel_local_parent.as_posix()))),
+            str(
+                pathlib.PurePosixPath(
+                    irods_collection, str(rel_local_parent.as_posix())
+                )
+            ),
         )
-
-    # utility iterator to read the local file in chunks: saves local disk space(!) and feeds a
-    # progress bar
-    def read_in_chuncks(file_handler, chunk_size=1024 * 1024 * 8):
-        while True:
-            data = file_handler.read(chunk_size)
-            if not data:
-                break
-            yield data
-
+    
     # consruct the irods destination full path
-    dst_path = str(pathlib.PurePosixPath(irods_collection, str(rel_local_path.as_posix())))
+    dst_path = str(
+        pathlib.PurePosixPath(irods_collection, str(rel_local_path.as_posix()))
+    )
     print(f"Destination path for upload is {dst_path}", verbosity=2)
-    # make the local read buffer 32MB
-    buffering = 32 * 1024 * 1024
-    # open the file with cool 'Rich' progress bar as a console display asset which implictely decorates a regular open()
-    with rich.progress.open(local_path, "rb", buffering=buffering) as f:
-        with irods_session.data_objects.open(dst_path, "w", auto_close=True) as f_dst:
-            for chunk in read_in_chuncks(f):
-                f_dst.write(chunk)
+
+
+    if progress_bar_irods:
+
+        from rich.progress import Progress
+
+        with rich.progress.Progress(
+            *Progress.get_default_columns(),
+            rich.progress.TimeElapsedColumn(),
+            rich.progress.FileSizeColumn(),
+            rich.progress.TotalFileSizeColumn(),
+            rich.progress.TextColumn(f"{local_path.name}"),
+        ) as progress:
+            pbar_task = progress.add_task(
+                f"[green]Uploading ...", total=local_path.stat().st_size
+            )
+
+            def pbar_update(n):
+                progress.update(task_id=pbar_task, advance=n)
+
+            irods_session.data_objects.put(
+                local_path=local_path, irods_path=dst_path, updatables=(pbar_update,)
+            )
+    else:
+        # pre prc 2.1.0 progressbar
+        # utility iterator to read the local file in chunks: saves local disk space(!) and feeds a
+        # progress bar
+        def read_in_chuncks(file_handler, chunk_size=1024 * 1024 * 8):
+            while True:
+                data = file_handler.read(chunk_size)
+                if not data:
+                    break
+                yield data
+
+        
+        #make the local read buffer 32MB
+        buffering = 32 * 1024 * 1024
+        #open the file with cool 'Rich' progress bar as a console display asset which implictely decorates a regular open()
+        with rich.progress.open(local_path, "rb", buffering=buffering) as f:
+            with irods_session.data_objects.open(dst_path, "w", auto_close=True) as f_dst:
+                for chunk in read_in_chuncks(f):
+                    f_dst.write(chunk)
+
+    # implicit validation and explicit declaration outside the progress context
     result_object = irods_session.data_objects.get(dst_path)
 
     # the whole aftermath validation chain
@@ -704,7 +749,9 @@ def upload_to_irods(
             )
         )
     ):
-        print(f"Successfully uploaded local {local_path} to irods {dst_path}")
+        print(
+            f"Successfully uploaded local {local_path} to irods {dst_path}", verbosity=2
+        )
         if metadata_handlers:
             metadata_dict = {}
             for metadata_handler, kwargs in metadata_handlers:
@@ -719,13 +766,14 @@ def upload_to_irods(
         result["success"].append(
             get_upload_status_record(local_path, checksum=local_checksum)
         )
-
+        busy_uploading = False
         return result_object
     else:
         print(f"Failed uploading {local_path} to irods {dst_path}")
         result["failed"].append(
             get_upload_status_record(local_path, checksum=local_checksum)
         )
+        busy_uploading = False
         return False
 
 
@@ -842,7 +890,7 @@ def do_initial_sync_and_or_restart(
     type=click.Choice(["native", "polling"]),
     help="The observer system to use for getting changed paths. "
     "Defaults to 'polling' which is recommended for most use cases, but you can use also 'native' "
-    "in for linux/mac filesystems when watching for new files that are directly written into the directory"
+    "for linux/mac filesystems when watching for new files that are directly written into the directory"
     "polling is a rather brute force algorithm, needed for network mounted drives and windows for example",
 )
 @click.option(
@@ -1044,13 +1092,15 @@ def mango_ingest(
                     ):
                         report_file.write_text(json.dumps(result, indent=2))
                         print(
-                            f"Updated report file {report_file}", style="orange1 bold"
+                            f"Updated report file {report_file}",
+                            style="orange1 bold",
+                            verbosity=2,
                         )
                     print(
                         f"Reporting thread heartbeat", style="orange1 bold", verbosity=2
                     )
                     # @todo decide to make this an option or not
-                    time.sleep(10)
+                    time.sleep(30)
 
             reporting_thread = threading.Thread(target=smart_save_results, daemon=True)
             reporting_thread.start()
