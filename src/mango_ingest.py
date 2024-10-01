@@ -690,9 +690,11 @@ def upload_to_irods(
         from rich.progress import Progress
 
         with rich.progress.Progress(
+            rich.progress.SpinnerColumn(),
             *Progress.get_default_columns(),
             rich.progress.TimeElapsedColumn(),
             rich.progress.FileSizeColumn(),
+            rich.progress.TransferSpeedColumn(),
             rich.progress.TotalFileSizeColumn(),
             rich.progress.TextColumn(f"{local_path.name}"),
         ) as progress:
