@@ -26,7 +26,7 @@ use the issue tracker to report on your findings/use cases and more..
 ```bash
 $ python -m venv venv
 $ . venv/bin/activate
-$ pip install --editable src
+$ pip install --editable .
 ```
 Afterwards verify the executable `mango_ingest` is available in your PATH
 
@@ -34,18 +34,15 @@ Afterwards verify the executable `mango_ingest` is available in your PATH
 $ mango_ingest --help
 ```
 
-### Quick checkout
-
-Just checkout the repository and copy the script `mango_ingest.py` around to where you want to execute it
-
 ### Authentication
 
 Authentication is done by creating an `iRODSSession` from a configuration file either as specified by the environment variable `IRODS_ENVIRONMENT_FILE` or with a fallback to the current user `~/.irods/irods_environment.json`.
 
 ## Usage
 
-`mango_ingest [OPTIONS] [COMMAND [OPTIONS] [ARGS]]`
-
+```
+mango_ingest [OPTIONS] [COMMAND [OPTIONS] [ARGS]]
+```
 
   If it detects a new file creation, the corresponding file is inspected
   through a white list (glob pattern and/or regular expression list) and if
