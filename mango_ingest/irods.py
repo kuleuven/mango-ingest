@@ -32,6 +32,10 @@ _progress_bar_irods = version_as_tuple() >= (2, 1, 0)  # pylint: disable=invalid
 # Simple caching and re-use, to expand like mango flow/ mango portal with expiry checks?
 _irods_session: Optional[iRODSSession] = None
 
+# iRODS host template for KU Leuven ManGO.
+MANGO_IRODS_HOST = r"{irods_zone}.irods.icts.kuleuven.be"
+
+
 def get_irods_env():
     """Get path to iRODS environment file"""
     return os.getenv(
@@ -53,6 +57,34 @@ def get_irods_session():
     _irods_session = iRODSSession(irods_env_file=env_file, **ssl_settings)
     return _irods_session
 
+
+def iinit(
+    irods_user,
+    irods_password,
+    irods_host,
+    irods_zone,
+    irods_port: int = 1247,
+    irods_authentication_scheme: str = "native",
+):
+    """Initialize iRODS environment"""
+    irods_config = {
+        "irods_host": irods_host,
+        "irods_port": irods_port,
+        "irods_zone_name": irods_zone,
+        "irods_user_name": irods_user,
+        "irods_encryption_algorithm": "AES-256-CBC",
+        "irods_authentication_scheme": irods_authentication_scheme,
+        "irods_encryption_salt_size": 8,
+        "irods_encryption_key_size": 32,
+        "irods_encryption_num_hash_rounds": 8,
+        "irods_ssl_ca_certificate_file": "",
+        "irods_ssl_verify_server": "cert",
+        "irods_client_server_negotiation": "request_server_negotiation",
+        "irods_client_server_policy": "CS_NEG_REQUIRE",
+        "irods_default_resource": "default",
+        "irods_cwd": f"/{irods_zone}/home/{irods_user}",
+        "irods_authentication_uid": 1000,
+    }
 
     def put(file_path, contents):
         os.makedirs(os.path.dirname(file_path), exist_ok=True)

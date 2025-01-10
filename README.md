@@ -38,6 +38,13 @@ $ mango_ingest --help
 
 Authentication is done by creating an `iRODSSession` from a configuration file either as specified by the environment variable `IRODS_ENVIRONMENT_FILE` or with a fallback to the current user `~/.irods/irods_environment.json`.
 
+To create an iRODS configuration file, you can use the `iinit` command provided by the iRODS client tools. Additionally, the `mango_ingest` tool offers an `iinit` command for your convenience.
+
+```bash
+$ mango_ingest iinit
+```
+
+
 ## Usage
 
 ```

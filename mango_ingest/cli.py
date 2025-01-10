@@ -14,6 +14,8 @@ import rich
 from .irods import (
     get_irods_session,
     sync_to_irods,
+    iinit as irods_iinit,
+    MANGO_IRODS_HOST,
 )
 from .utils.config import load_config
 from .utils.logging import configure_console_logging, set_verbosity
@@ -396,6 +398,43 @@ def examples(ctx):  # pylint: disable=unused-argument
     expressions in Python.
     """
     console.print(ctx.get_help(), soft_wrap=False, markup=True)
+
+
+@mango_ingest.command()
+@click.option("--irods-user", help="iRODS user name", required=False)
+@click.option("--irods-password", help="iRODS password", required=False)
+@click.option("--irods-zone", help="iRODS zone", required=False)
+@click.option("--irods-host", help="iRODS host", default=MANGO_IRODS_HOST)
+@click.option("--irods-port", help="iRODS port", default=1247)
+@click.option(
+    "--irods-auth-scheme", help="iRODS authentication scheme", default="native"
+)
+def iinit(
+    irods_user=None,
+    irods_password=None,
+    irods_zone=None,
+    irods_host=MANGO_IRODS_HOST,
+    irods_port=1247,
+    irods_auth_scheme="native",
+):
+    """Initialize iRODS session"""
+    if not irods_user:
+        irods_user = click.prompt("iRODS user name", default=getpass.getuser())
+    if not irods_password:
+        irods_password = click.prompt("iRODS password", hide_input=True)
+    if not irods_zone:
+        irods_zone = click.prompt("iRODS zone")
+    if irods_host == MANGO_IRODS_HOST:
+        irods_host = MANGO_IRODS_HOST.format(irods_zone=irods_zone)
+        irods_host = click.prompt("iRODS host", default=irods_host)
+    irods_iinit(
+        irods_user=irods_user,
+        irods_password=irods_password,
+        irods_zone=irods_zone,
+        irods_host=irods_host,
+        irods_port=irods_port,
+        irods_authentication_scheme=irods_auth_scheme,
+    )
 
 
 @mango_ingest.command()
