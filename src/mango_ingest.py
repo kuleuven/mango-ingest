@@ -177,10 +177,32 @@ def get_irods_session(backoff=None) -> iRODSSession:
         env_file = os.environ["IRODS_ENVIRONMENT_FILE"]
     except KeyError:
         env_file = os.path.expanduser("~/.irods/irods_environment.json")
-    ssl_context = ssl.create_default_context(
-        purpose=ssl.Purpose.SERVER_AUTH, cafile=None, capath=None, cadata=None
-    )
-    ssl_settings = {"ssl_context": ssl_context}
+    ssl_settings = {}
+    try:
+        with open(env_file) as env_handle:
+            env = json.load(env_handle)
+
+        # Respect iRODS SSL verification settings from the environment file.
+        verify_server = str(env.get("irods_ssl_verify_server", "")).strip().lower()
+        ca_file = env.get("irods_ssl_ca_certificate_file")
+        if verify_server == "none":
+            ssl_context = ssl._create_unverified_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+            ssl_settings = {"ssl_context": ssl_context}
+        elif ca_file:
+            ssl_context = ssl.create_default_context(
+                purpose=ssl.Purpose.SERVER_AUTH,
+                cafile=ca_file,
+                capath=None,
+                cadata=None,
+            )
+            ssl_settings = {"ssl_context": ssl_context}
+    except Exception as e:
+        print(
+            f"Could not read or apply SSL settings from iRODS env file {env_file}: {e}",
+            verbosity=2,
+        )
 
     irods_session = iRODSSession(
         irods_env_file=env_file,
