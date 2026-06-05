@@ -269,11 +269,7 @@ def bulk_add_metadata(
                     [
                         AVUOperation(
                             "add",
-                            iRODSMeta(
-                                name=m_name,
-                                value=sub_value,
-                                units=metadata_option_unit_value,
-                            ),
+                            iRODSMeta(m_name, sub_value, metadata_option_unit_value),
                         )
                         for sub_value in m_value
                     ]
@@ -283,9 +279,7 @@ def bulk_add_metadata(
                 avu_operations.append(
                     AVUOperation(
                         operation="add",
-                        avu=iRODSMeta(
-                            name=m_name, value=m_value, units=metadata_option_unit_value
-                        ),
+                        avu=iRODSMeta(m_name, m_value, metadata_option_unit_value),
                     )
                 )
             else:
@@ -392,7 +386,7 @@ def check_path_upload_eligibility(
     regexes: list | None = None,
     filters: list | None = None,
     filter_strategy: str = "and",
-    filter_log: str | bool = False, # not implemented yet
+    filter_log: str | bool = False,  # not implemented yet
 ) -> bool:
 
     # create empty iterators
@@ -401,14 +395,16 @@ def check_path_upload_eligibility(
     if filters is None:
         filters = []
 
-    regex_match = False if regexes else True # if no regexes, it is treaded as regex match anything
+    regex_match = (
+        False if regexes else True
+    )  # if no regexes, it is treaded as regex match anything
     if regexes and any(re.search(pattern, str(file_path)) for pattern in regexes):
         regex_match = True
     filters_matches = []
     if filter_strategy.lower() == "or" and regexes and regex_match:
         # do not bother to execue the filters. But this is an unlikely use case
         return True
-    for (filter, filter_kwargs) in filters:
+    for filter, filter_kwargs in filters:
         print(
             f"validating against custom filter  with {filter_kwargs}",
             style="bold blue",
@@ -628,13 +624,14 @@ class ManGOIngestHandler(RegexMatchingEventHandler):
         # if any(r.search(p) for r in self.regexes for p in paths):
         #     super().dispatch(event)
         for p in paths:
-            if check_path_upload_eligibility(file_path=pathlib.Path(p), regexes=self.regexes, filters=self.filters):
+            if check_path_upload_eligibility(
+                file_path=pathlib.Path(p), regexes=self.regexes, filters=self.filters
+            ):
                 # add reporting on the matches list
                 super().dispatch(event)
             else:
                 # add reporting on the ignore list
                 pass
-
 
     def handle_event(self, event: FileSystemEvent):
         # exclude directory creation, we are ony interested in files (for now)
@@ -842,7 +839,11 @@ def upload_to_irods(
             irods_session.data_objects.put(
                 local_path=local_path, irods_path=dst_path, updatables=(pbar_update,)
             )
-            irods_session.data_objects.touch(dst_path, no_create=True, seconds_since_epoch=int(local_path.stat().st_mtime))
+            irods_session.data_objects.touch(
+                dst_path,
+                no_create=True,
+                seconds_since_epoch=int(local_path.stat().st_mtime),
+            )
     else:
         # pre prc 2.1.0 progressbar
         # utility iterator to read the local file in chunks: saves local disk space(!) and feeds a
@@ -1412,9 +1413,9 @@ def mango_ingest(
         # new --filter option, using a tuple, also multiple filters can be specified
         if filter:
             print(f"Custom filters: {filter}")
-            for (_filter_func, _filter_func_kwargs) in filter:
+            for _filter_func, _filter_func_kwargs in filter:
                 if _filter_func and "." in _filter_func:
-                    #try:
+                    # try:
                     (_filter_module, _filter_function) = _filter_func.rsplit(".", 1)
                     _filter_func_module = (
                         importlib.import_module(_filter_module)
@@ -1427,9 +1428,7 @@ def mango_ingest(
                         else None
                     )
                     _filter_func_kwargs = (
-                        json.loads(_filter_func_kwargs)
-                        if _filter_func_kwargs
-                        else {}
+                        json.loads(_filter_func_kwargs) if _filter_func_kwargs else {}
                     )
                     # now add to filter_functions
                     if _filter_func is not None:
@@ -1463,7 +1462,7 @@ def mango_ingest(
                 ignore=ignore,
                 # filter=filter_func,
                 # filter_kwargs=filter_func_kwargs,
-                filters = filter_functions,
+                filters=filter_functions,
                 restart_paths=restart_paths,
                 verify_checksum=verify_checksum,
                 metadata_handlers=metadata_handlers,
@@ -1479,7 +1478,7 @@ def mango_ingest(
                     irods_destination=destination,
                     filter=filter_func,
                     filter_kwargs=filter_func_kwargs,
-                    filters = filter_functions,
+                    filters=filter_functions,
                     verify_checksum=verify_checksum,
                     regexes=regex,  # class RegexMatchingEventHandler
                     ignore_regexes=ignore,  # class RegexMatchingEventHandler
